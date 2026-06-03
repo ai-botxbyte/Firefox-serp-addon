@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Local runtime artefacts
+*.log
+results.json
+firefox.log
+server.log
+
+# Firefox profile / dev binaries (legacy launcher; safe to ignore)
+.firefox-profile/
+.firefox-dev/
+extensions/
+*.xpi
+
+# Packaged Buster source we no longer ship in-repo
+extracter_extensions/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

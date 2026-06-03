@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BotXByte SERP Puller</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 12px; min-width: 280px; }
+  h3 { margin: 0 0 8px; font-size: 14px; }
+  .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 13px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .ok { background: #16a34a; }
+  .off { background: #9ca3af; }
+  .warn { background: #f59e0b; }
+  .small { color: #6b7280; font-size: 11px; }
+  button { margin-top: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+           border-radius: 4px; border: 1px solid #d1d5db; background: #f3f4f6; }
+  button:hover { background: #e5e7eb; }
+  button.primary { background: #2563eb; color: white; border-color: #1d4ed8; }
+  button.primary:hover { background: #1d4ed8; }
+  #permRow, #grantBtn { display: none; }
+</style>
+</head>
+<body>
+  <h3>BotXByte SERP Puller</h3>
+  <div class="row">
+    <span id="dot" class="dot off"></span>
+    <span id="state">Disconnected</span>
+  </div>
+  <div class="row" id="permRow">
+    <span id="permDot" class="dot warn"></span>
+    <span id="permState">Host permission missing</span>
+  </div>
+  <div class="small">server.py: ws://localhost:8765</div>
+  <div class="small" id="last">last batch: —</div>
+  <button id="grantBtn" class="primary">Grant access to all sites</button>
+  <script src="popup.js"></script>
+</body>
+</html>

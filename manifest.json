@@ -1,0 +1,84 @@
+{
+  "manifest_version": 3,
+  "name": "BotXByte SERP Puller (Firefox)",
+  "version": "1.0.0",
+  "description": "Pulls 100 SERP queries at a time from a local server.py and runs them in Google/Bing with Buster + Turnstile auto-solving.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "serp-puller@botxbyte.com",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "alarms",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
+    "webNavigation",
+    "cookies"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "scripts": ["workflow_runner.js", "background.js"]
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src ws://127.0.0.1:8765 ws://localhost:8765 http://127.0.0.1:8210 http://localhost:8210 https://*"
+  },
+  "action": {
+    "default_title": "BotXByte SERP Puller",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["csp_stripper.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["turnstile_injected.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["turnstile_bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://www.google.com/*",
+        "https://www.bing.com/*",
+        "https://news.google.com/*"
+      ],
+      "js": ["serp_runner.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "strip_csp",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
+}

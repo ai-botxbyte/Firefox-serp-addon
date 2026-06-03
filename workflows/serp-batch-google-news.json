@@ -1,0 +1,70 @@
+{
+  "url": "https://www.google.com/search?q=botxbyte",
+  "variables": {
+    "queries": "artificial intelligence news,machine learning trends,deep learning 2026,OpenAI latest update",
+    "hl": "en",
+    "gl": "us",
+    "sort_by": "date",
+    "time_period": "",
+    "device": "desktop",
+    "location": ""
+  },
+  "options": {
+    "new_tab": true,
+    "close_tab": true,
+    "close_tab_on_error": false,
+    "execution": {
+      "stop_on_error": true
+    }
+  },
+  "actions": [
+    {
+      "type": "wait_for",
+      "selectors": ["body"],
+      "timeout": 10000
+    },
+    {
+      "type": "delay",
+      "timeout": 2000
+    },
+    {
+      "type": "if_exists",
+      "selectors": ["[class*='cookie']", "button[id*='accept']", "[aria-label='Accept all']"],
+      "timeout": 3000,
+      "actions": [
+        {
+          "type": "click",
+          "selectors": ["button[id*='accept']", "[aria-label='Accept all']", "text:Accept all"]
+        }
+      ]
+    },
+    {
+      "type": "if_exists",
+      "selectors": ["iframe[src*='recaptcha']", "#captcha-form", "form[action*='sorry']"],
+      "timeout": 5000,
+      "actions": [
+        {
+          "type": "recaptcha_solve",
+          "max_attempts": 3
+        },
+        {
+          "type": "delay",
+          "timeout": 3000
+        },
+        {
+          "type": "navigate",
+          "url": "https://www.google.com/search?q=botxbyte"
+        },
+        {
+          "type": "delay",
+          "timeout": 2000
+        }
+      ]
+    },
+    {
+      "type": "evaluate",
+      "script": "async function fetchSearchHTML(t,e={}){const{hl:r=\"\",gl:n=\"\",client:s=\"safari\",sort_by:o=\"\",time_period:i=\"\",device:a=\"\",location:c=\"\"}=e,u=new URLSearchParams({q:t,hl:r,gl:n,client:s});if(c){const t=getUuleParameter(c);u.append(\"uule\",t)}o&&u.append(\"sort\",o),i&&u.append(\"tbs\",\"qdr:\"+i),a&&u.append(\"tbm\",\"mobile\"===a?\"nws-mob\":\"nws\");const l=\"https://www.google.com/search?\"+u.toString()+\"&tbm=nws\";try{const t=await fetch(l);if(!t.ok)throw new Error(\"HTTP error! status: \"+t.status);return await t.text()}catch(t){throw console.error(\"Error fetching search HTML:\",t),t}}function getUuleParameter(t){const e=(new TextEncoder).encode(t),r=String.fromCharCode(e.length);return\"w+CAIQICI\"+btoa(r+t)}function extractTitle(t){const e=/<title>(.*?)<\\/title>/g;let r,n=\"\";for(;null!==(r=e.exec(t));)n=r[1].trim();return n}function extractResultCount(t){var e=-1;const r=[/About ([\\d,\\.]+) results?/i,/(\\d[\\d,\\.]*)\\s+results?/i,/\"resultStats\"[^>]*>About ([\\d,\\.]+)/i,/\"resultStats\"[^>]*>([\\d,\\.]+)\\s+results?/i,/id=\"result-stats\"[^>]*>About ([\\d,\\.]+)/i,/id=\"result-stats\"[^>]*>([\\d,\\.]+)\\s+results?/i,/>([\\d,\\.]+)\\s+results?\\s+\\(/i,/About ([\\d,\\.]+)\\s+news/i];for(const n of r){const r=n.exec(t);if(r&&r[1]){e=r[1].replace(/[,\\.]/g,\"\");break}}return e}function extractPagination(t){const e={pageLinks:[],currentPage:null,nextPageLink:null};t.querySelectorAll(\"td\").forEach((t=>{const r=t.querySelector(\"a.fl\"),n=t.innerText.trim();r&&n?e.pageLinks.push({page:parseInt(n),url:r.href}):!r&&n&&(e.currentPage=parseInt(n))}));const r=t.querySelector(\"a#pnnext\");return r&&(e.nextPageLink=r.href),e}function extractNewsData(t,e=\"div[data-news-doc-id]\"){const r=t.querySelectorAll(e),n=[];return r.forEach(((t,e)=>{const r={};r.position=e+1;const s=t.querySelector(\"a.WlydOe\");r.link=s?.href||\"N/A\";const o=t.querySelector(\".n0jPhd\");r.title=o?.innerText.trim()||\"N/A\";const i=t.querySelector(\".GI74Re\");r.snippet=i?.innerText.trim()||\"N/A\";const a=t.querySelector(\".MgUUmf span\");r.source=a?.innerText.trim()||\"N/A\";try{r.domain=new URL(r.link).hostname}catch{r.domain=\"N/A\"}const c=t.querySelector(\".OSrXXb span[data-ts]\"),u=c?.getAttribute(\"data-ts\"),l=c?.textContent?.trim()||\"N/A\";let p=\"N/A\",m=\"N/A\",d=\"N/A\";if(u){const t=new Date(1e3*parseInt(u,10));p=t.toISOString(),d=t.toISOString().split(\"T\")[0],m=t.toISOString().split(\"T\")[1].replace(\"Z\",\"\")}r.date=l,r[\"date-utc\"]=p,r.time=m,r[\"date-only\"]=d;const g=t.querySelector('img[src^=\"data:image\"], img[src^=\"http\"]');r.thumbnail=g?.src||\"N/A\",n.push(r)})),n}function extractTopStories(e={}){var t=e.doc||null,h=e.htmlContent||\"\";if(!t&&h){t=(new DOMParser).parseFromString(h,\"text/html\")}if(!t)return[];return Array.from(t.querySelectorAll(\".m7jPZ\")).map(((t,e)=>{const r=t.querySelector(\"a.WlydOe\"),n=t.querySelector(\".OSrXXb span\"),s=t.querySelector(\".MgUUmf > span:last-child\"),o=n?.dataset?.ts;return{\"#\":e+1,Visible:e<3?\"true\":\"false\",Title:t.querySelector(\".n0jPhd.ynAwRc\")?.textContent?.trim()||\"\",Source:s?.textContent?.trim()||\"\",Date:n?.textContent?.trim()||\"\",\"UTC Date\":o?new Date(1e3*parseInt(o)).toISOString():\"\",Link:r?.href||\"\"}}))}async function processQuery(t,e={}){try{const r=\"object\"==typeof t&&null!==t?t.query:t,n=\"object\"==typeof t&&null!==t?t.query_id:void 0,s=await fetchSearchHTML(r,e),o=(new DOMParser).parseFromString(s,\"text/html\"),i={success:true,query:r,query_id:n,serpOptions:e,title:extractTitle(s),serp_result_count:extractResultCount(s),pagination:extractPagination(o),news_results:extractNewsData(o),top_stories:extractTopStories({doc:o})},a=Object.fromEntries(Object.entries(i).filter((([t,e])=>null!==e&&!(Array.isArray(e)&&0===e.length))));return a.news_results&&a.news_results.length>0||a.pagination&&a.pagination.pageLinks&&a.pagination.pageLinks.length>0?a:{error:true,query:t,serpOptions:e,message:\"No meaningful content found\"}}catch(r){return{success:false,query:t,serpOptions:e,error:r.message}}}function withTimeout(t,e,r,n){return Promise.race([t,new Promise((t=>setTimeout((()=>t({query:r,serpOptions:n,timeout:true,error:\"Request timed out after \"+e+\"ms\"})),e)))])}async function fetchNewsWithConfig(t,r={}){const n=t.map((t=>processQuery(t,r)));try{return await Promise.all(n)}catch(e){return console.error(\"Error in fetchNewsWithConfig:\",e),t.map((t=>({query:t,serpOptions:r,error:e.message})))}} var serpOpts={hl:'${hl}',gl:'${gl}',sort_by:'${sort_by}',time_period:'${time_period}',device:'${device}',location:'${location}'}; var queryList='${queries}'.split(',').map(function(q){return q.trim();}); var results=await fetchNewsWithConfig(queryList,serpOpts); return JSON.stringify({search_type:'google-news',total_queries:queryList.length,results:results});",
+      "set_variable": "batch_results"
+    }
+  ]
+}

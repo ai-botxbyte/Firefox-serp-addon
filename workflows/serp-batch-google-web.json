@@ -1,0 +1,70 @@
+{
+  "url": "https://www.google.com/search?q=botxbyte",
+  "variables": {
+    "queries": "site:botxbyte.com, site:github.com botxbyte, site:stackoverflow.com botxbyte, site:linkedin.com botxbyte, site:twitter.com botxbyte, site:facebook.com botxbyte, site:medium.com botxbyte, site:reddit.com botxbyte, site:quora.com botxbyte, site:youtube.com botxbyte, site:instagram.com botxbyte, site:crunchbase.com botxbyte, site:glassdoor.com botxbyte, site:indeed.com botxbyte, site:upwork.com botxbyte, site:fiverr.com botxbyte, site:behance.net botxbyte, site:dribbble.com botxbyte, site:pinterest.com botxbyte, site:tiktok.com botxbyte, site:github.com python, site:stackoverflow.com fastapi, site:github.com seleniumbase, site:npmjs.com react, site:pypi.org requests, site:dev.to tutorial, site:hashnode.com seo, site:producthunt.com saas, site:indiehackers.com automation, site:news.ycombinator.com startup, site:techcrunch.com ai, site:theverge.com gadgets, site:wired.com technology, site:forbes.com business, site:bloomberg.com markets, site:reuters.com world news, site:nytimes.com headlines, site:wsj.com economy, site:bbc.com international, site:cnn.com breaking, site:microsoft.com azure, site:aws.amazon.com lambda, site:cloud.google.com kubernetes, site:digitalocean.com droplets, site:heroku.com deployment, site:vercel.com nextjs, site:netlify.com hosting, site:cloudflare.com dns, site:godaddy.com domains, site:namecheap.com offers, site:apple.com iphone, site:samsung.com galaxy, site:tesla.com energy, site:openai.com chatgpt, site:anthropic.com claude, site:huggingface.co models, site:kaggle.com datasets, site:coursera.org python, site:udemy.com seo course, site:edx.org computer science, site:wikipedia.org algorithm, site:britannica.com history, site:investopedia.com dividends, site:healthline.com nutrition, site:webmd.com symptoms, site:mayoclinic.org health, site:amazon.com deals, site:ebay.com electronics, site:walmart.com grocery, site:target.com home, site:nike.com shoes, site:https://www.google.com/search?q=adidas.com sports, site:booking.com hotels, site:expedia.com flights, site:tripadvisor.com reviews, site:airbnb.com rentals, site:yelp.com restaurants, site:zillow.com real estate",
+    "hl": "en",
+    "gl": "us",
+    "sort_by": "",
+    "time_period": "",
+    "device": "desktop",
+    "location": ""
+  },
+  "options": {
+    "new_tab": true,
+    "close_tab": true,
+    "close_tab_on_error": false,
+    "execution": {
+      "stop_on_error": true
+    }
+  },
+  "actions": [
+    {
+      "type": "wait_for",
+      "selectors": ["body"],
+      "timeout": 10000
+    },
+    {
+      "type": "delay",
+      "timeout": 2000
+    },
+    {
+      "type": "if_exists",
+      "selectors": ["[class*='cookie']", "button[id*='accept']", "[aria-label='Accept all']"],
+      "timeout": 3000,
+      "actions": [
+        {
+          "type": "click",
+          "selectors": ["button[id*='accept']", "[aria-label='Accept all']", "text:Accept all"]
+        }
+      ]
+    },
+    {
+      "type": "if_exists",
+      "selectors": ["iframe[src*='recaptcha']", "#captcha-form", "form[action*='sorry']"],
+      "timeout": 5000,
+      "actions": [
+        {
+          "type": "recaptcha_solve",
+          "max_attempts": 3
+        },
+        {
+          "type": "delay",
+          "timeout": 3000
+        },
+        {
+          "type": "navigate",
+          "url": "https://www.google.com/search?q=botxbyte"
+        },
+        {
+          "type": "delay",
+          "timeout": 2000
+        }
+      ]
+    },
+    {
+      "type": "evaluate",
+      "script": "async function fetchSearchHTML(e,t={}){const{hl:r=\"\",gl:n=\"\",client:o=\"safari\",sort_by:c=\"\",time_period:l=\"\",device:i=\"\",location:s=\"\"}=t,a=new URLSearchParams({q:e,hl:r,gl:n,client:o});if(s){const e=getUuleParameter(s);a.append(\"uule\",e)}c&&a.append(\"sort\",c),l&&a.append(\"tbs\",\"qdr:\"+l);const u=\"https://www.google.com/search?\"+a.toString();try{const e=await fetch(u);if(!e.ok)throw new Error(\"HTTP error! status: \"+e.status);return await e.text()}catch(e){throw console.error(\"Error fetching search HTML:\",e),e}}function getUuleParameter(e){const t=(new TextEncoder).encode(e),r=String.fromCharCode(t.length);return\"w+CAIQICI\"+btoa(r+e)}function extractTitle(e){const t=/<title>(.*?)<\\/title>/g;let r,n=\"\";for(;null!==(r=t.exec(e));)n=r[1].trim();return n}function extractResultCount(e){var t=-1;const r=[/About ([\\d,\\.]+) results?/i,/(\\d[\\d,\\.]*)\\s+results?/i,/\"resultStats\"[^>]*>About ([\\d,\\.]+)/i,/\"resultStats\"[^>]*>([\\d,\\.]+)\\s+results?/i,/id=\"result-stats\"[^>]*>About ([\\d,\\.]+)/i,/id=\"result-stats\"[^>]*>([\\d,\\.]+)\\s+results?/i,/>([\\d,\\.]+)\\s+results?\\s+\\(/i];for(const n of r){const r=n.exec(e);if(r&&r[1]){t=r[1].replace(/[,\\.]/g,\"\");break}}return t}function extractOrganicResults(e){const t=[];return e.querySelectorAll(\"div.MjjYud\").forEach(((e,r)=>{try{const n=e.querySelector(\"h3\")?.textContent?.trim()||\"\",o=e.querySelector(\"a\")?.href?.trim()||\"\",c=e.querySelector(\".VwiC3b\")?.textContent?.trim()||\"\",l=e.querySelector(\"img.XNo5Ab\")?.src?.trim()||\"\",i=o?new URL(o).hostname:\"\";if(!n&&!o)return;t.push({position:r+1,title:n,link:o,domain:i,snippet:c,image:l})}catch(e){console.warn(\"Error processing organic result:\",e)}})),t}function extractLocalResults(e){const t=[];return e.querySelectorAll(\"div.cXedhc\").forEach(((e,r)=>{try{const n=e.querySelector(\".dbg0pd .OSrXXb\")?.textContent||\"\",o=e.querySelector(\".pJ3Ci span\")?.textContent||\"\",c=e.querySelectorAll(\".rllt__details > div\"),l=c[2]?.textContent||\"\",i=(c[1]?.textContent||\"\").split(\"\\u00b7\").map((e=>e.trim())),s=i[i.length-1]||\"\",a=i.find((e=>/^[$\\u20b9\\u20ac\\u00a5]+[\\d\\-\\u2013\\s]*$/.test(e)))||\"\",u=e.querySelector(\".yi40Hd\")?.textContent||\"\",d=e.querySelector(\".RDApEe\")?.textContent.replace(/[()]/g,\"\")||\"\",m=e.querySelector(\"a[data-cid]\")?.getAttribute(\"data-cid\")||\"\",h=e.querySelector(\"img.YQ4gaf\")?.src||\"\";let y=\"\",p=\"\";const S=e.closest(\".VkpGBb\")?.parentElement;S&&S.querySelectorAll(\"a\").forEach((e=>{const t=e.textContent.trim();\"Website\"===t&&(y=e.href),\"Directions\"===t&&(p=e.href)})),t.push({position:r+1,title:n,snippet:o,address:l,business_type:s,price:a,rating:u,review:d,data_cid:m,image:h,website:y,directions:p})}catch(e){console.warn(\"Error parsing local result:\",e)}})),t}function extractPagination(e){const t={pageLinks:[],currentPage:null,nextPageLink:null};e.querySelectorAll(\"td\").forEach((e=>{const r=e.querySelector(\"a.fl\"),n=e.innerText.trim();r&&n?t.pageLinks.push({page:parseInt(n),url:r.href}):!r&&n&&(t.currentPage=parseInt(n))}));const r=e.querySelector(\"a#pnnext\");return r&&(t.nextPageLink=r.href),t}function extractRelatedSearches(e=document,t=\"a.ngTNl.ggLgoc\"){const r=[];return e.querySelectorAll(t).forEach(((e,t)=>{const n=e.querySelector(\"span.dg6jd\")?.innerText.trim()||\"\",o=e.href||\"\";r.push({position:t+1,title:n,link:o})})),r}function extractQAInfo(e={}){var t=e.doc||null,h=e.htmlContent||\"\";if(!t&&h){t=(new DOMParser).parseFromString(h,\"text/html\")}if(!t)return[];const r=[];return t.querySelectorAll(\"div.wQiwMc.related-question-pair\").forEach(((e,t)=>{const n=e.querySelector(\".CSkcDe\")?.textContent.trim()||\"\",o=[],c=e.querySelector(\".IZ6rdc\")?.textContent.trim();c&&o.push(c);const l=e.querySelector(\".hgKElc\")?.textContent.trim();l&&o.push(l);e.querySelectorAll(\".ztXv9, .webanswers-webanswers_table__webanswers-table tr\").forEach((e=>{const t=e.textContent.trim().replace(/\\s+/g,\" \");t&&o.push(t)}));const i=o.join(\" \").trim();let s=\"\",a=\"\",u=\"\";const d=e.querySelector(\"a.zReHs\");if(d){s=d.getAttribute(\"href\")||\"\",a=d.querySelector(\"h3.LC20lb\")?.textContent.trim()||\"\";const e=d.querySelector(\"cite.qLRx3b, .VuuXrf\")?.textContent;if(e)u=e.split(\"\\u203a\")[0].trim();else try{u=new URL(s).hostname}catch(e){u=\"\"}}r.push({question:n,answer:i,link:s,domain:u,title:a,blockposition:t})})),r}function extractTopStories(e={}){var t=e.doc||null,h=e.htmlContent||\"\";if(!t&&h){t=(new DOMParser).parseFromString(h,\"text/html\")}if(!t)return[];return Array.from(t.querySelectorAll(\".m7jPZ\")).map(((t,r)=>{const n=t.querySelector(\"a.WlydOe\"),o=t.querySelector(\".OSrXXb span\"),c=t.querySelector(\".MgUUmf > span:last-child\"),l=o?.dataset?.ts;return{\"#\":r+1,Visible:r<3?\"true\":\"false\",Title:t.querySelector(\".n0jPhd.ynAwRc\")?.textContent?.trim()||\"\",Source:c?.textContent?.trim()||\"\",Date:o?.textContent?.trim()||\"\",\"UTC Date\":l?new Date(1e3*parseInt(l)).toISOString():\"\",Link:n?.href||\"\"}}))}function extractVisualStories(e={}){var t=e.doc||null,h=e.htmlContent||\"\";if(!t&&h){t=(new DOMParser).parseFromString(h,\"text/html\")}if(!t)return[];const r=[];return t.querySelectorAll(\"div.w43QB.EXH1Ce\").forEach(((t,n)=>{try{const e=t.querySelector(\"a.ddkIM\"),o=e?.href||\"\",c=t.querySelector(\"span.Yt787\"),l=c?.innerText||\"\",i=t.querySelector(\"img[id^='dimg_']\")?.src||\"\";r.push({position:n+1,title:l,image:i,link:o})}catch(e){console.warn(\"Error parsing block at position\",n,e)}})),r}function extractVideoResults(e={}){var t=e.doc||null,h=e.htmlContent||\"\";if(!t&&h){t=(new DOMParser).parseFromString(h,\"text/html\")}if(!t)return[];const r=[];return t.querySelectorAll(\"div.Tu1FGd\").forEach((t=>{try{const e=t.querySelector(\"div.OSrXXb span\")?.innerText||\"\",n=t.querySelector(\".kSFuOd span\")?.innerText||\"\",o=t.querySelector(\".Sg4azc\")?.innerText||\"\",c=t.querySelector(\"a.rIRoqf\")?.href||\"\",l=t.querySelector(\"img\")?.src||\"\";r.push({title:e,duration:n,channel:o,videoLink:c,thumbnail:l})}catch(e){console.warn(\"Error parsing video block:\",e)}})),r}function extractTweets(e){const t=e.querySelectorAll(\".fy7gGf\"),r=[];return t.forEach((e=>{try{const t={},n=e.querySelector(\".ZgGG5b .xcQxib\");t.snippet=n?.innerText.trim()||\"\";const o=e.querySelector(\"a.h4kbcd\");t.statusLink=o?.href||\"\";const c=e.querySelector(\"img\");t.image=c?.src||\"\",t.title=\"Tweet from embedded source\";const l=e.querySelector(\".PygIW\");t.time=l?.innerText||\"\",r.push(t)}catch(e){console.warn(\"Error parsing tweet block:\",e)}})),r}function extractHotels(e){const t=e.querySelectorAll('a[jsname][role=\"link\"].NANqI');return Array.from(t).map(((e,t)=>{const r=t+1,n=e.getAttribute(\"data-key\")||null,o=e.getAttribute(\"data-lat\")||null,c=e.getAttribute(\"data-lng\")||null,l=e.querySelector(\".KmZaZb .BTPx6e\")?.textContent.trim()||null,i=e.querySelector(\".c4RtQd .sRlU8b\")?.textContent.trim()||null;let s=null,a=null;const u=e.querySelector(\".j4Tqqd .Y0A0hc\");u&&(s=u.querySelector(\".yi40Hd\")?.textContent?.trim()||null,a=u.querySelector(\".RDApEe\")?.textContent?.replace(/[()]/g,\"\")?.trim()||null);return{position:r,dataKey:n,lat:o,lng:c,name:l,price:i,rating:s,reviewCount:a,snippet:e.querySelector(\".dLtZ8b\")?.textContent.trim()||null,type:e.querySelector(\".j4Tqqd .NAkmnc\")?.textContent.trim()||null,blockPosition:t}}))}function extractMovieData(e){const t={castData:[],reviewsData:{rating:null,reviews:[],moreReviewsLinkText:null},servicesData:[]};e.querySelectorAll(\".XRVJtc.bnmjfe.aKByQb\").forEach((e=>{const r=e.querySelector(\".yVCOtc.CvgGZ.LJEGod.aKoISd\")?.textContent.trim()||\"N/A\",n=e.querySelector(\".PeZnd\")?.textContent.trim()||\"N/A\",o=e.querySelector(\"img\"),c=o?.getAttribute(\"data-src\")||o?.getAttribute(\"src\")||\"N/A\";t.castData.push({name:r,character:n,imageUrl:c})}));const r=e.querySelector(\"div.xt8Uw.q8U8x\");t.reviewsData.rating=r?r.innerText.trim():null;e.querySelectorAll(\"div.e8eHnd\").forEach((e=>{const r=e.querySelector(\"span\")?.innerText.trim()||null,n=e.closest(\".Pl0lPb\")?.querySelector(\"img\")?.src||null;t.reviewsData.reviews.push({description:r,source:n})}));const n=e.querySelector(\"g-more-link .Z4Cazf\");return t.reviewsData.moreReviewsLinkText=n?n.innerText.trim():null,e.querySelectorAll(\".eGiiEf.ngmM2 .bLddW.U5EKEf.coTbne.ZEISdd\").forEach((r=>{const n=r.querySelector(\"a.coTbne\"),o=e.querySelector(\"h1.WQWxe\")?.innerText||\"Unknown Title\",c=n?.href||\"N/A\",l=n?.querySelector(\".ellip.bclEt\")?.innerText||\"N/A\",i=n?.querySelector(\".ellip.rsj3fb\")?.innerText||\"N/A\",s=n?.querySelector(\"img\")?.src||\"N/A\";t.servicesData.push({title:o,serviceName:l,price:i,link:c,imageUrl:s})})),t}async function processQuery(e,t={}){try{const r=await fetchSearchHTML(e,t),n=(new DOMParser).parseFromString(r,\"text/html\"),o={success:true,query:e,title:extractTitle(r),serp_result_count:extractResultCount(r),organic_results:extractOrganicResults(n),local_results:extractLocalResults(n),pagination:extractPagination(n),relatedSearches:extractRelatedSearches(n),topStories:extractTopStories({doc:n,htmlContent:r}),visualStories:extractVisualStories({doc:n,htmlContent:r}),videoResults:extractVideoResults({doc:n,htmlContent:r}),tweetData:extractTweets(n),hotelResults:extractHotels(n)},c=Object.fromEntries(Object.entries(o).filter((([e,t])=>null!==t&&!(Array.isArray(t)&&0===t.length))));return c.organic_results?.length>0||c.topStories?.length>0||c.videoResults?.length>0||c.visualStories?.length>0||c.local_results?.length>0||c.relatedSearches?.length>0||c.tweetData?.length>0||c.hotelResults?.length>0?c:{error:true,query:e,message:\"No meaningful content found\"}}catch(t){return{success:false,error:true,query:e,error:t.message}}}function withTimeout(e,t,r,n){return Promise.race([e,new Promise((e=>setTimeout((()=>e({query:r,serpOptions:n,timeout:true,error:\"Request timed out after \"+t+\"ms\"})),t)))])}async function fetchWebWithConfig(e,n={}){const o=e.map((e=>processQuery(e,n)));return Promise.all(o)} var serpOpts={hl:'${hl}',gl:'${gl}',sort_by:'${sort_by}',time_period:'${time_period}',device:'${device}',location:'${location}'}; var queryList='${queries}'.split(',').map(function(q){return q.trim()}).filter(function(q){return q.length>0}); var results=await fetchWebWithConfig(queryList,serpOpts); return JSON.stringify(results);",
+      "set_variable": "batch_results"
+    }
+  ]
+}

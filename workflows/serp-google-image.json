@@ -1,0 +1,48 @@
+{
+  "url": "https://www.google.com",
+  "variables": {
+    "query": "artificial intelligence",
+    "hl": "en",
+    "gl": "us",
+    "sort_by": "",
+    "time_period": "",
+    "device": "desktop",
+    "location": ""
+  },
+  "options": {
+    "new_tab": true,
+    "close_tab": true,
+    "close_tab_on_error": false
+  },
+  "actions": [
+    {
+      "type": "navigate",
+      "url": "https://www.google.com/search?q=${query}&hl=${hl}&gl=${gl}&tbm=isch"
+    },
+    {
+      "type": "wait_for",
+      "selectors": ["div[data-attrid='images universal']", "div.islrc", "img.YQ4gaf"],
+      "timeout": 15000
+    },
+    {
+      "type": "delay",
+      "timeout": 2000
+    },
+    {
+      "type": "if_exists",
+      "selectors": ["[class*='cookie']", "button[id*='accept']", "[aria-label='Accept all']"],
+      "timeout": 3000,
+      "actions": [
+        {
+          "type": "click",
+          "selectors": ["button[id*='accept']", "[aria-label='Accept all']", "text:Accept all"]
+        }
+      ]
+    },
+    {
+      "type": "evaluate",
+      "script": "async function fetchSearchHTML(e,t={}){const{hl:r=\"\",gl:s=\"\",client:n=\"safari\",sort_by:o=\"\",time_period:i=\"\",device:c=\"\",location:u=\"\"}=t,a=new URLSearchParams({q:e,hl:r,gl:s,client:n});if(u){const e=getUuleParameter(u);a.append(\"uule\",e)}o&&a.append(\"sort\",o),i&&a.append(\"tbs\",\"qdr:\"+i),c&&a.append(\"tbm\",\"mobile\"===c?\"nws-mob\":\"nws\");const l=\"https://www.google.com/search?\"+a.toString()+\"&tbm=isch\";try{const e=await fetch(l);if(!e.ok)throw new Error(\"HTTP error! status: \"+e.status);return await e.text()}catch(e){throw console.error(\"Error fetching search HTML:\",e),e}}function getUuleParameter(e){const t=(new TextEncoder).encode(e),r=String.fromCharCode(t.length);return\"w+CAIQICI\"+btoa(r+e)}function extractTitle(e){const t=/<title>(.*?)<\\/title>/g;let r,s=\"\";for(;null!==(r=t.exec(e));)s=r[1].trim();return s}function extractResultCount(e){var t=-1;const r=[/About ([\\d,\\.]+) results?/i,/(\\d[\\d,\\.]*)\\s+results?/i,/\"resultStats\"[^>]*>About ([\\d,\\.]+)/i,/\"resultStats\"[^>]*>([\\d,\\.]+)\\s+results?/i,/id=\"result-stats\"[^>]*>About ([\\d,\\.]+)/i,/id=\"result-stats\"[^>]*>([\\d,\\.]+)\\s+results?/i,/>([\\d,\\.]+)\\s+results?\\s+\\(/i];for(const s of r){const r=s.exec(e);if(r&&r[1]){t=r[1].replace(/[,\\.]/g,\"\");break}}return t}function extractImageResults(e,t='div[data-attrid=\"images universal\"]'){const r=e.querySelectorAll(t),s=[];return r.forEach(((e,t)=>{const r={};r.position=t+1;const n=e.querySelector(\"a.EZAeBe\")||e.querySelector(\"a\");r.link=n?.href||\"N/A\";const o=e.querySelector(\".toI8Rb\")||e.querySelector(\"h3\");r.title=o?.innerText.trim()||\"N/A\";const i=e.querySelector(\".guK3rf span\");r.domain=i?.innerText.trim()||\"N/A\";const c=e.querySelector(\"img.YQ4gaf\");r.image=c?.src||\"N/A\",r.width=c?.width||\"N/A\",r.height=c?.height||\"N/A\";const u=e.querySelector(\"a.EZAeBe\"),a=i?.innerText.trim()||\"N/A\";let l=\"N/A\";try{l=new URL(u?.href||\"\").hostname}catch(e){}r.source={link:u?.href||\"N/A\",domain:l,name:a},s.push(r)})),s}async function processQuery(e,t={}){try{const r=\"object\"==typeof e&&null!==e?e.query:e,s=\"object\"==typeof e&&null!==e?e.query_id:void 0,n=await fetchSearchHTML(r,void 0,t),o=(new DOMParser).parseFromString(n,\"text/html\"),i={success:!0,query:r,query_id:s,title:extractTitle(n),serp_result_count:extractResultCount(n),image_results:extractImageResults(o)},c=Object.fromEntries(Object.entries(i).filter((([e,t])=>null!==t&&!(Array.isArray(t)&&0===t.length))));return c.image_results?.length>0?c:{error:!0,query:r,query_id:s,message:\"No meaningful content found in result , Request limit reached out\"}}catch(t){return{success:!1,query:\"object\"==typeof e&&null!==e?e.query:e,query_id:\"object\"==typeof e&&null!==e?e.query_id:void 0,error:t.message}}}function withTimeout(e,t,r,s){return Promise.race([e,new Promise((e=>setTimeout((()=>e({query:r})),t)))])} var serpOpts={hl:'${hl}',gl:'${gl}',sort_by:'${sort_by}',time_period:'${time_period}',device:'${device}',location:'${location}'}; var res=await processQuery('${query}',serpOpts); return JSON.stringify(res);",
+      "set_variable": "serp_result"
+    }
+  ]
+}
