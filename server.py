@@ -48,6 +48,7 @@ import websockets
 
 MGMT_BASE_URL = os.getenv("MGMT_BASE_URL", "http://localhost:8210").rstrip("/")
 MGMT_AUTH_TOKEN = os.getenv("MGMT_AUTH_TOKEN", "")
+MGMT_WORKSPACE_ID = os.getenv("MGMT_WORKSPACE_ID", "")
 SERP_PULL_PATH = os.getenv("SERP_PULL_PATH", "/api/v1/serp-queue/pull/")
 SERP_RESULT_PATH = os.getenv("SERP_RESULT_PATH", "/api/v1/serp-queue/result/")
 POLL_INTERVAL_SECS = float(os.getenv("POLL_INTERVAL_SECS", "5"))
@@ -84,6 +85,8 @@ def _auth_headers() -> Dict[str, str]:
     h = {"Content-Type": "application/json"}
     if MGMT_AUTH_TOKEN:
         h["Authorization"] = f"Bearer {MGMT_AUTH_TOKEN}"
+    if MGMT_WORKSPACE_ID:
+        h["workspace-id"] = MGMT_WORKSPACE_ID
     return h
 
 
