@@ -16,11 +16,14 @@ results never reach the management service); the corresponding workflow
 will simply time out the same way it would on an APISerpent failure.
 
 Usage:
-    python3 server.py
+    python3 server.py --mode local       # file-based (domains.txt -> results.json)
+    python3 server.py --mode prod        # poll prod management API
+    python3 server.py --mode prod --engine bing --query-type index
+    python3 server.py                    # defaults to local
 
-Env:
-    MGMT_BASE_URL              default http://localhost:8210
-    MGMT_AUTH_TOKEN            optional bearer token
+Env (overridable, but --mode handles all common defaults):
+    MGMT_BASE_URL              prod default: https://b-domain.articleinnovator.com/domain-metrics-management-service
+    MGMT_AUTH_TOKEN            optional bearer token (not needed — endpoints are public)
     POLL_INTERVAL_SECS         default 5
     BATCH_SIZE                 default 100
     WS_PORT                    default 8765
@@ -29,6 +32,7 @@ Env:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -46,7 +50,47 @@ import websockets
 # itself. We keep /transcribe out of the API surface entirely.
 
 
-MGMT_BASE_URL = os.getenv("MGMT_BASE_URL", "http://localhost:8210").rstrip("/")
+# ---------------------------------------------------------------------------
+# CLI: --mode local | prod
+# ---------------------------------------------------------------------------
+PROD_MGMT_BASE_URL = "https://b-domain.articleinnovator.com/domain-metrics-management-service"
+LOCAL_MGMT_BASE_URL = "http://localhost:8210"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Firefox SERP extension — local pull-mode server",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  python3 server.py --mode local\n"
+            "  python3 server.py --mode prod\n"
+            "  python3 server.py --mode prod --engine bing --query-type index\n"
+        ),
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["local", "prod"],
+        default="local",
+        help="local = read domains.txt, write results.json (default). "
+             "prod  = poll https://b-domain.articleinnovator.com management API.",
+    )
+    parser.add_argument("--engine", choices=["google", "bing"], default=None,
+                        help="(local mode only) override LOCAL_ENGINE, default google")
+    parser.add_argument("--query-type", choices=["index", "news"], default=None,
+                        help="(local mode only) override LOCAL_QUERY_TYPE, default index")
+    return parser.parse_args()
+
+
+_ARGS = _parse_args()
+MODE = _ARGS.mode  # "local" | "prod"
+
+
+# ---------------------------------------------------------------------------
+# Configuration — derived from --mode, then overridable via env
+# ---------------------------------------------------------------------------
+_default_base = PROD_MGMT_BASE_URL if MODE == "prod" else LOCAL_MGMT_BASE_URL
+MGMT_BASE_URL = os.getenv("MGMT_BASE_URL", _default_base).rstrip("/")
 MGMT_AUTH_TOKEN = os.getenv("MGMT_AUTH_TOKEN", "")
 MGMT_WORKSPACE_ID = os.getenv("MGMT_WORKSPACE_ID", "")
 SERP_PULL_PATH = os.getenv("SERP_PULL_PATH", "/api/v1/serp-queue/pull/")
@@ -58,15 +102,15 @@ HTTP_PORT = int(os.getenv("HTTP_PORT", "8766"))
 BATCH_TIMEOUT_SECS = float(os.getenv("BATCH_TIMEOUT_SECS", "180"))
 
 # --- LOCAL MODE (file-based, no management service) -------------------------
-# When LOCAL_MODE=1 (default), server.py ignores MGMT_BASE_URL pull/result
-# entirely. Instead it reads domains from DOMAINS_FILE (one per line),
-# forwards them as SERP jobs to the Firefox addon, and writes results to
-# RESULTS_FILE.
-LOCAL_MODE = os.getenv("LOCAL_MODE", "1") not in ("0", "false", "False", "")
+# In local mode, server.py ignores MGMT_BASE_URL pull/result entirely. Instead
+# it reads domains from DOMAINS_FILE (one per line), forwards them as SERP
+# jobs to the Firefox addon, and writes results to RESULTS_FILE.
+# In prod mode, this flag is False and the API poll loop runs.
+LOCAL_MODE = (MODE == "local")
 DOMAINS_FILE = os.getenv("DOMAINS_FILE", os.path.join(os.path.dirname(__file__), "domains.txt"))
 RESULTS_FILE = os.getenv("RESULTS_FILE", os.path.join(os.path.dirname(__file__), "results.json"))
-LOCAL_ENGINE = os.getenv("LOCAL_ENGINE", "google")        # google|bing
-LOCAL_QUERY_TYPE = os.getenv("LOCAL_QUERY_TYPE", "index")  # index|news
+LOCAL_ENGINE = _ARGS.engine or os.getenv("LOCAL_ENGINE", "google")          # google|bing
+LOCAL_QUERY_TYPE = _ARGS.query_type or os.getenv("LOCAL_QUERY_TYPE", "index")  # index|news
 
 ws_conn: Optional[websockets.WebSocketServerProtocol] = None
 pending: Dict[str, asyncio.Future] = {}
@@ -396,6 +440,7 @@ async def status_handler(_req):
 
 
 async def main():
+    print(f"🚀 mode: {MODE.upper()}")
     print(f"🔌 ws://localhost:{WS_PORT} (Firefox addon)")
     print(f"🌐 http://localhost:{HTTP_PORT}/status")
     if LOCAL_MODE:
@@ -403,7 +448,8 @@ async def main():
         print(f"   → engine={LOCAL_ENGINE} query_type={LOCAL_QUERY_TYPE}")
         print(f"   → results will be written to {RESULTS_FILE}")
     else:
-        print(f"📡 management: {MGMT_BASE_URL}{SERP_PULL_PATH} / {SERP_RESULT_PATH}")
+        print(f"📡 PROD MODE: {MGMT_BASE_URL}{SERP_PULL_PATH}")
+        print(f"               {MGMT_BASE_URL}{SERP_RESULT_PATH}")
         print(f"⏱️  poll interval: {POLL_INTERVAL_SECS}s, batch size: {BATCH_SIZE}")
 
     await websockets.serve(ws_handler, "localhost", WS_PORT, max_size=20 * 1024 * 1024)
