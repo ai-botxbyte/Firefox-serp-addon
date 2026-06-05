@@ -219,6 +219,27 @@ async def push_results(session: aiohttp.ClientSession, results: List[Dict[str, A
             status_state["last_publish_count"] = published
             status_state["last_publish_failed"] = failed
             print(f"📤 published={published} failed={failed} status={resp.status}")
+            # If the server returned a 4xx/5xx, dump the body so we can see the
+            # validation/upstream error instead of silently reporting 0/0.
+            if resp.status >= 400:
+                # Pretty-print pydantic validation errors when present.
+                detail = payload.get("detail") if isinstance(payload, dict) else None
+                if isinstance(detail, list):
+                    print(f"  ⚠️ HTTP {resp.status} validation errors:")
+                    for err in detail[:10]:
+                        loc = ".".join(str(x) for x in err.get("loc", []))
+                        print(f"     - {loc}: {err.get('msg')} (type={err.get('type')})")
+                    if len(detail) > 10:
+                        print(f"     ... and {len(detail) - 10} more")
+                else:
+                    print(f"  ⚠️ HTTP {resp.status} body: {text[:800]}")
+                # Also dump the offending payload (truncated) so we can compare.
+                try:
+                    sample = results[0] if results else {}
+                    print(f"  📦 first result payload sample (truncated): "
+                          f"{json.dumps({k: sample.get(k) for k in ('execution_id','domain_name','engine','query_type','queue_name','success','is_indexed','error')}, default=str)[:400]}")
+                except Exception:
+                    pass
     except Exception as e:
         status_state["errors"] += 1
         status_state["last_error"] = f"push: {e}"
