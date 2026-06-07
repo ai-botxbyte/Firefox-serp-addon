@@ -14,10 +14,9 @@ jobs:
 
       - name: Download Firefox ESR
         run: |
-          curl -L -o /tmp/firefox-esr.tar.bz2 "https://download.mozilla.org/?product=firefox-esr-latest&os=linux64&lang=en-US"
-          file /tmp/firefox-esr.tar.bz2
+          curl -L -o /tmp/firefox-esr.tar.xz "https://download.mozilla.org/?product=firefox-esr-latest&os=linux64&lang=en-US"
           mkdir -p firefox-portable
-          tar -xjf /tmp/firefox-esr.tar.bz2 -C firefox-portable/
+          tar -xJf /tmp/firefox-esr.tar.xz -C firefox-portable/
 
       - name: Setup config files
         run: |
