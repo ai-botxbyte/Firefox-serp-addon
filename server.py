@@ -292,6 +292,58 @@ async def run_batch_with_addon(jobs: List[Dict[str, Any]]) -> List[Dict[str, Any
     return reply.get("results") or []
 
 
+async def warmup_with_addon() -> bool:
+    """Ask the addon to open the hello SERP and solve any captcha BEFORE we
+    pull a batch (warmup-before-pull). Returns True only when the addon
+    reports the page is loaded and clean — so we never pull jobs we can't
+    serve. The warm tab is kept on the addon side and reused by the batch."""
+    waited = 0
+    while not ws_conn and waited < 30:
+        await asyncio.sleep(0.5)
+        waited += 1
+    if not ws_conn:
+        print("⚠️ addon not connected; cannot warm up")
+        return False
+
+    req_id = str(uuid.uuid4())
+    fut: asyncio.Future = asyncio.Future()
+    pending[req_id] = fut
+    payload = json.dumps({
+        "action": "warmup", "id": req_id,
+        "engine": LOCAL_ENGINE, "qtype": LOCAL_QUERY_TYPE,
+    })
+    sent = False
+    for attempt in range(60):  # up to ~30s waiting for a live socket
+        if ws_conn is not None:
+            try:
+                await ws_conn.send(payload)
+                sent = True
+                break
+            except Exception as e:
+                print(f"⚠️ ws warmup send failed (attempt {attempt}): {e}")
+        await asyncio.sleep(0.5)
+    if not sent:
+        print("❌ could not deliver warmup to addon")
+        pending.pop(req_id, None)
+        return False
+
+    try:
+        try:
+            reply = await asyncio.wait_for(fut, timeout=BATCH_TIMEOUT_SECS)
+        except asyncio.TimeoutError:
+            print("❌ warmup timed out waiting for addon")
+            return False
+    finally:
+        pending.pop(req_id, None)
+
+    ready = bool(reply.get("ready"))
+    if ready:
+        print(f"🔥 warmup ready (url={reply.get('url')})")
+    else:
+        print(f"⚠️ warmup not ready: {reply.get('reason')} (url={reply.get('url')})")
+    return ready
+
+
 async def poll_loop():
     timeout = aiohttp.ClientTimeout(total=120)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -301,9 +353,20 @@ async def poll_loop():
                 if not ws_conn:
                     await asyncio.sleep(POLL_INTERVAL_SECS)
                     continue
+                # WARMUP-BEFORE-PULL: open the hello SERP and clear any captcha
+                # FIRST. Only pull a batch once the page is confirmed clean, so
+                # we don't consume queue jobs we can't actually serve.
+                warm = await warmup_with_addon()
+                if not warm:
+                    # Captcha unsolved / addon not ready. Back off longer so we
+                    # don't hammer the hello page (which can get the IP walled).
+                    await asyncio.sleep(max(POLL_INTERVAL_SECS, 15))
+                    continue
                 jobs = await pull_jobs(session)
                 if not jobs:
-                    await asyncio.sleep(POLL_INTERVAL_SECS)
+                    # Queue empty. Back off longer so an idle queue doesn't make
+                    # us re-open the hello page every few seconds.
+                    await asyncio.sleep(max(POLL_INTERVAL_SECS, 15))
                     continue
                 results = await run_batch_with_addon(jobs)
                 if results:

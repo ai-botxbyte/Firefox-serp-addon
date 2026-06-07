@@ -40,6 +40,10 @@ let wsConnected = false;
 // Number of in-flight batches. The keepalive alarm sends a WS heartbeat
 // while this is > 0 so MV3 won't suspend the background script mid-batch.
 let inFlight = 0;
+// A SERP tab pre-warmed by a 'warmup' request (warmup-before-pull). Shape:
+// { tabId, engine }. runSerpBatch reuses it so jobs are only processed on a
+// page that's already loaded and captcha-cleared.
+let warmTab = null;
 
 // --- Toolbar icon helpers ----------------------------------------------------
 
@@ -180,6 +184,15 @@ async function handleServerMessage(msg) {
   if (msg.action === 'runSerpBatch') {
     const result = await runSerpBatch(msg.jobs || []);
     await sendReply({ id: msg.id, success: true, results: result });
+    return;
+  }
+  if (msg.action === 'warmup') {
+    // server.py asks us to warm a SERP tab (open hello page + solve captcha)
+    // BEFORE it pulls a batch. We keep the tab in `warmTab`; the next
+    // runSerpBatch reuses it. Reply {ready:bool} so server.py knows whether
+    // it's safe to pull.
+    const res = await handleWarmup(msg.engine, msg.qtype);
+    await sendReply({ id: msg.id, success: true, ...res });
     return;
   }
   if (msg.action === 'ping') {
@@ -336,6 +349,79 @@ function decideMatch(domain, queryResult) {
   return { matched, indexed_count, total_results };
 }
 
+// Open the engine's "warmup" SERP (q=hello), recover from lazy-parked
+// about:blank tabs, and solve any captcha (Buster handles audio reCAPTCHA).
+// Returns a tabId sitting on a clean, cookie-trusted SERP. We use a
+// low-suspicion query so the engine is less likely to challenge us; if it
+// DOES, solving it here once makes the resulting cookies (NID/CONSENT/SID…)
+// carry the "trusted" token through every subsequent in-page fetch().
+async function prepareWarmTab(engine) {
+  const warmupUrl = engine === 'google'
+    ? 'https://www.google.com/search?q=hello'
+    : 'https://www.bing.com/search?q=hello';
+  console.log(`[warmup] opening ${warmupUrl}`);
+  // active:true → foreground (visible in VNC) and never lazy-parked.
+  const tab = await RT.tabs.create({ url: warmupUrl, active: true, discarded: false });
+  const tabId = tab.id;
+
+  await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
+  // Firefox sometimes parks tabs on about:blank even though we asked for a URL.
+  let cur;
+  try { cur = await RT.tabs.get(tabId); } catch (_) { cur = null; }
+  const onPrivileged = !cur || !cur.url
+    || cur.url.startsWith('about:')
+    || cur.url.startsWith('moz-extension:')
+    || cur.url === 'chrome://newtab/';
+  if (onPrivileged) {
+    console.warn(`[warmup] tab ${tabId} parked at ${cur && cur.url} — forcing navigation`);
+    await RT.tabs.update(tabId, { url: warmupUrl, active: true });
+    await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
+    const start = Date.now();
+    while (Date.now() - start < 10000) {
+      const t = await RT.tabs.get(tabId);
+      if (t && t.url && !t.url.startsWith('about:') && !t.url.startsWith('moz-extension:')) {
+        console.log(`[warmup] tab ${tabId} now on ${t.url}`);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  // SOLVE CAPTCHA if present. After this, cookies are trusted.
+  console.log(`[warmup] checking page for captcha...`);
+  await ensureCaptchaSolved(tabId);
+  await new Promise((r) => setTimeout(r, 1500));
+  return tabId;
+}
+
+// Handle a 'warmup' request from server.py: warm a tab BEFORE the batch is
+// pulled. Stores the ready tab in `warmTab` and reports whether the page is
+// clean (not stuck on a /sorry/ captcha wall).
+async function handleWarmup(engine, qtype) {
+  engine = engine || 'google';
+  // Drop any stale warm tab first.
+  if (warmTab) {
+    try { await RT.tabs.remove(warmTab.tabId); } catch (_) { /* gone */ }
+    warmTab = null;
+  }
+  try {
+    const tabId = await prepareWarmTab(engine);
+    let url = '';
+    try { const t = await RT.tabs.get(tabId); url = (t && t.url) || ''; } catch (_) {}
+    if (url.includes('/sorry/')) {
+      // Still captcha-walled — don't let server.py pull jobs we can't serve.
+      console.warn(`[warmup] still blocked at ${url}`);
+      try { await RT.tabs.remove(tabId); } catch (_) {}
+      return { ready: false, reason: 'captcha not cleared', url };
+    }
+    warmTab = { tabId, engine };
+    console.log(`[warmup] ready tab ${tabId} (url=${url})`);
+    return { ready: true, url };
+  } catch (e) {
+    console.error('[warmup] failed:', e && e.message);
+    return { ready: false, reason: (e && e.message) || String(e) };
+  }
+}
+
 async function runSerpGroup(engine, qtype, jobs) {
   const key = `${engine}/${qtype}`;
   const workflowPath = WORKFLOW_BY_KEY[key];
@@ -352,57 +438,20 @@ async function runSerpGroup(engine, qtype, jobs) {
     client: 'safari',
   };
 
-  // Open a "warmup" SERP first. We use a low-suspicion query (q=hello) so
-  // Google is less likely to challenge us, and if it DOES throw a captcha
-  // we solve it here ONCE — the resulting cookies (NID/CONSENT/SID etc.)
-  // then carry the "trusted" token through every subsequent in-page
-  // fetch() the workflow makes. Without this warmup, every parallel
-  // fetch hits the bot wall and returns HTTP 429.
-  const warmupUrl = engine === 'google'
-    ? 'https://www.google.com/search?q=hello'
-    : 'https://www.bing.com/search?q=hello';
-  console.log(`[batch] warmup: opening ${warmupUrl}`);
-  // active:true → tab loads in the FOREGROUND so it's visible (e.g. in VNC)
-  // and is never held lazy/parked on about:blank (which would make
-  // scripting.executeScript fail with "Missing host permission for the tab").
-  const tab = await RT.tabs.create({ url: warmupUrl, active: true, discarded: false });
-  const tabId = tab.id;
+  // Reuse a tab pre-warmed by a 'warmup' request (warmup-before-pull). If
+  // none is available (e.g. the MV3 background was suspended between the
+  // warmup and the batch), warm one inline so we never run on a cold page.
+  let tabId;
+  if (warmTab && warmTab.engine === engine) {
+    tabId = warmTab.tabId;
+    console.log(`[batch] reusing pre-warmed tab ${tabId} for ${key}`);
+    warmTab = null; // consumed; server.py re-warms before the next batch
+  } else {
+    console.log(`[batch] no warm tab for ${engine}; warming inline`);
+    tabId = await prepareWarmTab(engine);
+  }
 
   try {
-    await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
-    // Verify the tab actually navigated. Firefox sometimes parks unactivated
-    // tabs on about:blank/about:newtab even though tabs.create asked for a URL.
-    let cur;
-    try { cur = await RT.tabs.get(tabId); } catch (_) { cur = null; }
-    const onPrivileged = !cur || !cur.url
-      || cur.url.startsWith('about:')
-      || cur.url.startsWith('moz-extension:')
-      || cur.url === 'chrome://newtab/';
-    if (onPrivileged) {
-      console.warn(`[batch] tab ${tabId} parked at ${cur && cur.url} — forcing navigation to ${warmupUrl}`);
-      await RT.tabs.update(tabId, { url: warmupUrl, active: true });
-      await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
-      // Wait until the URL is actually no longer about:* (status:complete is not enough).
-      const start = Date.now();
-      while (Date.now() - start < 10000) {
-        const t = await RT.tabs.get(tabId);
-        if (t && t.url && !t.url.startsWith('about:') && !t.url.startsWith('moz-extension:')) {
-          console.log(`[batch] tab ${tabId} now on ${t.url}`);
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 250));
-      }
-    }
-    // SOLVE CAPTCHA on warmup page if present. Buster (if installed) takes
-    // care of audio reCAPTCHA. After this, cookies are trusted.
-    console.log(`[batch] checking warmup page for captcha...`);
-    await ensureCaptchaSolved(tabId);
-    // If we landed on /sorry/ and got redirected, we may now be on a real
-    // SERP. Either way, give the page a sec to settle before evaluate.
-    await new Promise((r) => setTimeout(r, 1500));
-    let warmupCheck;
-    try { warmupCheck = await RT.tabs.get(tabId); } catch (_) { warmupCheck = null; }
-    console.log(`[batch] warmup complete, tab url=${warmupCheck && warmupCheck.url}`);
 
     // Hand the tab off to the workflow runner. It executes all the actions
     // (wait_for / delay / if_exists / evaluate ...) and stores the JSON
