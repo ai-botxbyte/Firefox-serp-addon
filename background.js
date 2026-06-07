@@ -251,6 +251,12 @@ async function runSerpBatch(jobs) {
 }
 
 function failureResult(job, errorMessage) {
+  // The management API validates `error` as a string (null is OK, boolean is
+  // NOT — sending `true` causes HTTP 422). Coerce defensively.
+  let errStr = null;
+  if (errorMessage !== null && errorMessage !== undefined) {
+    errStr = typeof errorMessage === 'string' ? errorMessage : String(errorMessage);
+  }
   return {
     execution_id: job.execution_id,
     domain_name: job.domain_name,
@@ -262,7 +268,7 @@ function failureResult(job, errorMessage) {
     indexed_count: 0,
     total_results: 0,
     matched_hosts: [],
-    error: errorMessage,
+    error: errStr,
     raw: job.raw || {},
   };
 }
@@ -310,7 +316,14 @@ function _apex(host) {
 }
 function decideMatch(domain, queryResult) {
   if (!queryResult || queryResult.error || queryResult.success === false) {
-    return { error: queryResult && (queryResult.error || queryResult.message) || 'no result', matched: [], indexed_count: 0, total_results: 0 };
+    // The per-query result uses a boolean `error: true` flag plus a `message`.
+    // The management API requires the result `error` field to be a STRING, so
+    // resolve to the message (or a sensible default) — never the boolean.
+    const msg = queryResult && (
+      queryResult.message ||
+      (typeof queryResult.error === 'string' ? queryResult.error : null)
+    );
+    return { error: msg || 'no meaningful content', matched: [], indexed_count: 0, total_results: 0 };
   }
   const target = _apex(domain);
   const candidates = [];
