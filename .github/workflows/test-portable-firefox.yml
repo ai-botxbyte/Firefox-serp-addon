@@ -1,0 +1,119 @@
+name: Test Firefox Portable Addon
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-addon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Firefox ESR
+        run: |
+          wget -q "https://download.mozilla.org/?product=firefox-esr-latest&os=linux64&lang=en-US" -O /tmp/firefox-esr.tar.bz2
+          mkdir -p firefox-portable
+          tar -xjf /tmp/firefox-esr.tar.bz2 -C firefox-portable/
+
+      - name: Setup config files
+        run: |
+          PORTABLE_DIR="$(pwd)/firefox-portable"
+          FIREFOX_DIR="$PORTABLE_DIR/firefox"
+
+          # autoconfig.js
+          mkdir -p "$FIREFOX_DIR/defaults/pref"
+          cat > "$FIREFOX_DIR/defaults/pref/autoconfig.js" << 'EOF'
+          pref("general.config.filename", "autoconfig.cfg");
+          pref("general.config.obscure_value", 0);
+          EOF
+
+          # autoconfig.cfg
+          cat > "$FIREFOX_DIR/autoconfig.cfg" << 'EOF'
+          // First line must be a comment
+          defaultPref("xpinstall.signatures.required", false);
+          defaultPref("extensions.langpacks.signatures.required", false);
+          EOF
+
+          # Package addon as XPI
+          mkdir -p "$PORTABLE_DIR/extensions"
+          cd "$GITHUB_WORKSPACE"
+          zip -r "$PORTABLE_DIR/extensions/serp-puller@botxbyte.com.xpi" . \
+            -x '.git/*' '.github/*' '*.DS_Store' 'firefox-portable/*'
+
+          # policies.json
+          mkdir -p "$FIREFOX_DIR/distribution"
+          cat > "$FIREFOX_DIR/distribution/policies.json" << EOF
+          {
+            "policies": {
+              "Extensions": {
+                "Install": ["$PORTABLE_DIR/extensions/serp-puller@botxbyte.com.xpi"]
+              },
+              "DisableAppUpdate": true,
+              "DontCheckDefaultBrowser": true
+            }
+          }
+          EOF
+
+          # Create profile
+          mkdir -p "$PORTABLE_DIR/profile"
+
+      - name: Verify XPI contents
+        run: |
+          echo "=== XPI file size ==="
+          ls -lh firefox-portable/extensions/serp-puller@botxbyte.com.xpi
+          echo ""
+          echo "=== XPI contains manifest.json ==="
+          unzip -l firefox-portable/extensions/serp-puller@botxbyte.com.xpi | grep manifest.json
+          echo ""
+          echo "=== Integrity check ==="
+          unzip -t firefox-portable/extensions/serp-puller@botxbyte.com.xpi > /dev/null && echo "OK: No errors"
+
+      - name: Test Firefox launches and loads addon
+        run: |
+          PORTABLE_DIR="$(pwd)/firefox-portable"
+          export DISPLAY=:99
+          sudo apt-get install -y xvfb > /dev/null 2>&1
+          Xvfb :99 -screen 0 1280x1024x24 &
+          sleep 2
+
+          # Launch Firefox with profile, wait for it to initialize
+          "$PORTABLE_DIR/firefox/firefox" --profile "$PORTABLE_DIR/profile" --headless --no-remote &
+          FIREFOX_PID=$!
+          sleep 5
+
+          # Check if addon was installed in profile
+          echo "=== Checking addon installation ==="
+          if find "$PORTABLE_DIR/profile/extensions" -name "serp-puller@botxbyte.com*" 2>/dev/null | grep -q .; then
+            echo "✅ Addon installed successfully in profile!"
+          elif find "$PORTABLE_DIR/profile" -path "*/extensions.json" 2>/dev/null | xargs grep -l "serp-puller" 2>/dev/null | grep -q .; then
+            echo "✅ Addon registered in extensions.json!"
+          else
+            echo "Checking extensions.json for addon reference..."
+            cat "$PORTABLE_DIR/profile/extensions.json" 2>/dev/null | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          addons = data.get('addons', [])
+          found = [a for a in addons if 'serp-puller' in a.get('id', '')]
+          if found:
+              print('✅ Addon found:', found[0]['id'], '- active:', found[0].get('active'))
+          else:
+              print('❌ Addon NOT found in extensions.json')
+              print('Registered addons:', [a.get('id') for a in addons])
+              sys.exit(1)
+          "
+          fi
+
+          kill $FIREFOX_PID 2>/dev/null || true
+
+      - name: Upload portable bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-portable-bundle
+          path: |
+            firefox-portable/extensions/serp-puller@botxbyte.com.xpi
+            firefox-portable/firefox/autoconfig.cfg
+            firefox-portable/firefox/defaults/pref/autoconfig.js
+            firefox-portable/firefox/distribution/policies.json
