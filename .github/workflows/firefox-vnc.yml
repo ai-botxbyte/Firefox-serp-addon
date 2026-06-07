@@ -1,0 +1,277 @@
+name: Firefox Addon VNC
+
+on:
+  workflow_dispatch:
+
+env:
+  DISPLAY: ":1"
+  VNC_PORT: 5901
+  NOVNC_PORT: 6080
+  VNC_PASSWORD: "botxbyte123"
+  PORTABLE_DIR: "/home/runner/firefox-portable"
+  ADDON_ID: "serp-puller@botxbyte.com"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout addon repo
+        uses: actions/checkout@v4
+
+      - name: Optimize APT mirror
+        timeout-minutes: 3
+        run: |
+          echo "Optimizing APT and network settings..."
+          sudo systemctl stop unattended-upgrades 2>/dev/null || true
+          sudo killall -9 unattended-upgrades 2>/dev/null || true
+
+          cat << 'EOF' | sudo tee /etc/apt/apt.conf.d/99ci-network >/dev/null
+          Acquire::Retries "6";
+          Acquire::http::Timeout "15";
+          Acquire::https::Timeout "15";
+          Acquire::ForceIPv4 "true";
+          EOF
+
+          sudo apt-get -o Acquire::Retries=6 update -q
+          echo "APT optimization complete"
+
+      - name: Install Desktop Environment (XFCE + VNC)
+        timeout-minutes: 18
+        run: |
+          echo "Installing XFCE desktop and TurboVNC..."
+          sudo systemctl stop unattended-upgrades 2>/dev/null || true
+          sudo killall -9 unattended-upgrades 2>/dev/null || true
+
+          for i in $(seq 1 12); do
+            if ! sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then break; fi
+            echo "Waiting for dpkg lock... ($i/12)"; sleep 5
+          done
+
+          mkdir -p ~/cached-debs
+
+          # Parallel downloads: TurboVNC + noVNC
+          (wget -q -O ~/cached-debs/turbovnc_2.2.5_amd64.deb \
+            https://phoenixnap.dl.sourceforge.net/project/turbovnc/2.2.5/turbovnc_2.2.5_amd64.deb && echo "TurboVNC downloaded") &
+          PID_VNC=$!
+          (cd ~ && git clone --depth 1 https://github.com/novnc/noVNC.git && \
+            cd noVNC && git clone --depth 1 https://github.com/novnc/websockify.git && echo "noVNC cloned") &
+          PID_NOVNC=$!
+
+          # Install XFCE while downloads happen
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+            xfce4 xfce4-terminal dbus-x11 x11-utils x11-xserver-utils xfonts-base net-tools \
+            libgtk-3-0 libdbus-glib-1-2 libasound2t64
+          echo "XFCE installed"
+
+          wait $PID_VNC && sudo dpkg -i ~/cached-debs/turbovnc_2.2.5_amd64.deb
+          echo "TurboVNC installed"
+
+          wait $PID_NOVNC
+          echo "noVNC ready"
+
+      - name: Download & assemble portable Firefox + addon
+        timeout-minutes: 5
+        run: |
+          echo "Downloading Firefox ESR..."
+          curl -L -o /tmp/firefox-esr.tar.xz "https://download.mozilla.org/?product=firefox-esr-latest&os=linux64&lang=en-US"
+          mkdir -p "$PORTABLE_DIR"
+          tar -xJf /tmp/firefox-esr.tar.xz -C "$PORTABLE_DIR/"
+
+          FIREFOX_DIR="$PORTABLE_DIR/firefox"
+
+          # autoconfig.js -> points to autoconfig.cfg
+          mkdir -p "$FIREFOX_DIR/defaults/pref"
+          cat > "$FIREFOX_DIR/defaults/pref/autoconfig.js" << 'EOF'
+          pref("general.config.filename", "autoconfig.cfg");
+          pref("general.config.obscure_value", 0);
+          EOF
+
+          # autoconfig.cfg -> disable signature enforcement (allow unsigned addon)
+          cat > "$FIREFOX_DIR/autoconfig.cfg" << 'EOF'
+          // First line must be a comment
+          defaultPref("xpinstall.signatures.required", false);
+          defaultPref("extensions.langpacks.signatures.required", false);
+          EOF
+
+          # Package the addon (repo root) into an XPI
+          mkdir -p "$PORTABLE_DIR/extensions"
+          cd "$GITHUB_WORKSPACE"
+          zip -r "$PORTABLE_DIR/extensions/${ADDON_ID}.xpi" . \
+            -x '.git/*' '.github/*' '*.DS_Store'
+
+          # policies.json -> auto-install the addon on launch
+          mkdir -p "$FIREFOX_DIR/distribution"
+          cat > "$FIREFOX_DIR/distribution/policies.json" << EOF
+          {
+            "policies": {
+              "Extensions": {
+                "Install": ["$PORTABLE_DIR/extensions/${ADDON_ID}.xpi"]
+              },
+              "DisableAppUpdate": true,
+              "DontCheckDefaultBrowser": true
+            }
+          }
+          EOF
+
+          mkdir -p "$PORTABLE_DIR/profile"
+          echo "Portable Firefox assembled at $PORTABLE_DIR"
+          unzip -l "$PORTABLE_DIR/extensions/${ADDON_ID}.xpi" | grep manifest.json
+
+      - name: Configure VNC Server
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          mkdir -p ~/.vnc
+          echo "${VNC_PASSWORD}" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+
+          # xstartup launches XFCE and then our portable Firefox with the profile
+          cat > ~/.vnc/xstartup.turbovnc << EOF
+          #!/bin/bash
+          export NO_AT_BRIDGE=1
+          export SESSION_MANAGER=""
+          dbus-launch /usr/bin/startxfce4 &
+          sleep 5
+          "$PORTABLE_DIR/firefox/firefox" --profile "$PORTABLE_DIR/profile" --no-remote &
+          EOF
+          chmod +x ~/.vnc/xstartup.turbovnc
+          echo "VNC configured (password: ${VNC_PASSWORD})"
+
+      - name: Start VNC Server
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          echo "Starting TurboVNC server on display :1..."
+          vncserver :1 -geometry 1920x1080 -depth 24 -rfbport $VNC_PORT 2>&1 | tee /tmp/vnc-start.log
+
+          for i in $(seq 1 15); do
+            if pgrep -f "Xvnc.*:1" > /dev/null; then
+              echo "TurboVNC started in ${i}s on port $VNC_PORT"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Failed to start VNC server"; cat /tmp/vnc-start.log; exit 1
+
+      - name: Start noVNC (Web VNC)
+        run: |
+          echo "Starting noVNC web server..."
+          cd ~/noVNC
+          ./utils/novnc_proxy --vnc localhost:$VNC_PORT --listen $NOVNC_PORT > /tmp/novnc.log 2>&1 &
+
+          for i in $(seq 1 10); do
+            if netstat -tuln | grep :$NOVNC_PORT > /dev/null; then
+              echo "noVNC started in ${i}s on port $NOVNC_PORT"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "noVNC failed to start"; cat /tmp/novnc.log; exit 1
+
+      - name: Install cloudflared
+        run: |
+          echo "Installing cloudflared..."
+          wget -q -O /tmp/cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i /tmp/cloudflared.deb
+          cloudflared --version
+          echo "cloudflared installed"
+
+      - name: Start Cloudflare Quick Tunnel
+        id: tunnel
+        run: |
+          echo "Starting Cloudflare quick tunnel for noVNC..."
+          cloudflared tunnel --no-autoupdate --url http://localhost:$NOVNC_PORT > /tmp/tunnel.log 2>&1 &
+
+          TUNNEL_URL=""
+          for i in $(seq 1 30); do
+            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/tunnel.log | head -1)
+            if [ -n "$TUNNEL_URL" ]; then break; fi
+            sleep 2
+          done
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "Failed to obtain tunnel URL"; cat /tmp/tunnel.log; exit 1
+          fi
+
+          echo "tunnel_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
+          echo "Cloudflare tunnel ready: $TUNNEL_URL"
+
+      - name: Verify addon loaded
+        run: |
+          echo "Waiting for Firefox to install the addon via policy..."
+          INSTALLED=0
+          for i in $(seq 1 30); do
+            if find "$PORTABLE_DIR/profile/extensions" -iname "${ADDON_ID}*" 2>/dev/null | grep -q .; then
+              echo "Addon XPI installed in profile/extensions (after ${i}x2s)"
+              INSTALLED=1; break
+            fi
+            if [ -s "$PORTABLE_DIR/profile/extensions.json" ] && grep -q "serp-puller" "$PORTABLE_DIR/profile/extensions.json" 2>/dev/null; then
+              echo "Addon registered in extensions.json (after ${i}x2s)"
+              INSTALLED=1; break
+            fi
+            sleep 2
+          done
+          if [ "$INSTALLED" = "1" ]; then
+            echo "✅ Addon is loaded — verify visually in the VNC session."
+          else
+            echo "⚠️ Addon not detected yet; check the Firefox window in VNC."
+          fi
+
+      - name: Display Connection Info
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "            FIREFOX ADDON VNC IS RUNNING!"
+          echo "================================================================"
+          echo ""
+          echo "VNC Access URL: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html"
+          echo "Password: ${VNC_PASSWORD}"
+          echo ""
+          echo "Firefox ESR is running with addon: ${ADDON_ID}"
+          echo "Open the URL above, connect, and confirm Firefox + your addon."
+          echo ""
+
+      - name: Keep Session Alive
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          set +e
+          echo "Keeping VNC session alive..."
+
+          while true; do
+            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html | Password: ${VNC_PASSWORD}"
+
+            # Restart VNC if it died (xstartup relaunches Firefox automatically)
+            if ! pgrep -f "Xvnc.*:1" > /dev/null; then
+              echo "VNC stopped! Restarting..."
+              vncserver :1 -geometry 1920x1080 -depth 24 -rfbport $VNC_PORT
+              sleep 3
+            fi
+
+            # Restart tunnel if it died
+            if ! pgrep -x "cloudflared" > /dev/null; then
+              echo "Tunnel stopped! Restarting..."
+              cloudflared tunnel --no-autoupdate --url http://localhost:$NOVNC_PORT > /tmp/tunnel.log 2>&1 &
+              sleep 5
+            fi
+
+            # Restart Firefox if it was closed
+            if ! pgrep -f "$PORTABLE_DIR/firefox/firefox" > /dev/null; then
+              echo "Firefox closed! Relaunching..."
+              DISPLAY=:1 "$PORTABLE_DIR/firefox/firefox" --profile "$PORTABLE_DIR/profile" --no-remote &
+              sleep 3
+            fi
+
+            sleep 30
+          done
+
+      - name: Cleanup VNC
+        if: always()
+        timeout-minutes: 1
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          pkill -f "firefox" || true
+          pkill -x cloudflared || true
+          vncserver -kill :1 || true
+          echo "Cleanup complete"
