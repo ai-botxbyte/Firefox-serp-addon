@@ -79,34 +79,64 @@ jobs:
           Xvfb :99 -screen 0 1280x1024x24 &
           sleep 2
 
-          # Launch Firefox with profile, wait for it to initialize
+          # Launch Firefox with profile in background
           "$PORTABLE_DIR/firefox/firefox" --profile "$PORTABLE_DIR/profile" --headless --no-remote &
           FIREFOX_PID=$!
-          sleep 5
 
-          # Check if addon was installed in profile
-          echo "=== Checking addon installation ==="
-          if find "$PORTABLE_DIR/profile/extensions" -name "serp-puller@botxbyte.com*" 2>/dev/null | grep -q .; then
-            echo "✅ Addon installed successfully in profile!"
-          elif find "$PORTABLE_DIR/profile" -path "*/extensions.json" 2>/dev/null | xargs grep -l "serp-puller" 2>/dev/null | grep -q .; then
-            echo "✅ Addon registered in extensions.json!"
-          else
-            echo "Checking extensions.json for addon reference..."
-            cat "$PORTABLE_DIR/profile/extensions.json" 2>/dev/null | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          addons = data.get('addons', [])
-          found = [a for a in addons if 'serp-puller' in a.get('id', '')]
-          if found:
-              print('✅ Addon found:', found[0]['id'], '- active:', found[0].get('active'))
-          else:
-              print('❌ Addon NOT found in extensions.json')
-              print('Registered addons:', [a.get('id') for a in addons])
-              sys.exit(1)
-          "
-          fi
+          # Poll up to 60s for the addon to be installed by the policy.
+          # The most reliable signal is the installed XPI landing in profile/extensions/,
+          # or the addon ID appearing in extensions.json once it's written.
+          echo "=== Waiting for addon installation ==="
+          INSTALLED=0
+          for i in $(seq 1 30); do
+            if find "$PORTABLE_DIR/profile/extensions" -iname "serp-puller@botxbyte.com*" 2>/dev/null | grep -q .; then
+              echo "✅ Addon XPI installed in profile/extensions (after ${i}x2s)"
+              INSTALLED=1
+              break
+            fi
+            if [ -s "$PORTABLE_DIR/profile/extensions.json" ] && grep -q "serp-puller" "$PORTABLE_DIR/profile/extensions.json" 2>/dev/null; then
+              echo "✅ Addon registered in extensions.json (after ${i}x2s)"
+              INSTALLED=1
+              break
+            fi
+            sleep 2
+          done
 
           kill $FIREFOX_PID 2>/dev/null || true
+          sleep 1
+
+          echo ""
+          echo "=== Verifying addon state in extensions.json ==="
+          if [ -s "$PORTABLE_DIR/profile/extensions.json" ]; then
+            cat > /tmp/check_addon.py <<'PY'
+          import sys, json
+          path = sys.argv[1]
+          try:
+              with open(path) as f:
+                  data = json.load(f)
+          except (ValueError, OSError) as e:
+              print("Could not parse extensions.json:", e)
+              sys.exit(1)
+          addons = data.get('addons', [])
+          found = [a for a in addons if 'serp-puller' in (a.get('id') or '')]
+          if found:
+              a = found[0]
+              print("Addon found:", a.get('id'), "| active:", a.get('active'), "| location:", a.get('location'))
+          else:
+              print("Addon NOT found in extensions.json")
+              print("Registered addons:", [a.get('id') for a in addons])
+              sys.exit(1)
+          PY
+            python3 /tmp/check_addon.py "$PORTABLE_DIR/profile/extensions.json"
+          elif [ "$INSTALLED" = "1" ]; then
+            echo "Addon XPI present in profile (extensions.json not yet flushed, but install confirmed)"
+          else
+            echo "Addon was not installed within timeout. Diagnostics:"
+            echo "--- profile contents ---"
+            ls -la "$PORTABLE_DIR/profile" || true
+            ls -la "$PORTABLE_DIR/profile/extensions" 2>/dev/null || echo "(no extensions dir)"
+            exit 1
+          fi
 
       - name: Upload portable bundle
         uses: actions/upload-artifact@v4
