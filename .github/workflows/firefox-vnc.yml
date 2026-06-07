@@ -11,7 +11,8 @@ env:
   PORTABLE_DIR: "/home/runner/firefox-portable"
   ADDON_ID: "serp-puller@botxbyte.com"
   # server.py mode: 'local' (file-based: domains.txt -> results.json) or 'prod'
-  SERP_MODE: "local"
+  # prod -> pulls jobs from b-domain.articleinnovator.com and posts results back.
+  SERP_MODE: "prod"
 
 jobs:
   run:
