@@ -100,6 +100,7 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))
 WS_PORT = int(os.getenv("WS_PORT", "8765"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8766"))
 BATCH_TIMEOUT_SECS = float(os.getenv("BATCH_TIMEOUT_SECS", "180"))
+PUBLISH_MAX_RETRIES = int(os.getenv("PUBLISH_MAX_RETRIES", "3"))  # transient publish retries
 
 # --- LOCAL MODE (file-based, no management service) -------------------------
 # In local mode, server.py ignores MGMT_BASE_URL pull/result entirely. Instead
@@ -206,23 +207,28 @@ async def push_results(session: aiohttp.ClientSession, results: List[Dict[str, A
     if not results:
         return
     url = f"{MGMT_BASE_URL}{SERP_RESULT_PATH}"
-    try:
-        async with session.post(url, json={"results": results}, headers=_auth_headers(), timeout=aiohttp.ClientTimeout(total=60)) as resp:
-            text = await resp.text()
-            try:
-                payload = json.loads(text)
-            except Exception:
-                payload = {"raw": text[:500]}
-            data = payload.get("data") or {}
-            published = data.get("published", 0)
-            failed = data.get("failed", 0)
-            status_state["last_publish_count"] = published
-            status_state["last_publish_failed"] = failed
-            print(f"📤 published={published} failed={failed} status={resp.status}")
-            # If the server returned a 4xx/5xx, dump the body so we can see the
-            # validation/upstream error instead of silently reporting 0/0.
-            if resp.status >= 400:
-                # Pretty-print pydantic validation errors when present.
+    # Publish with retries. Transient failures (network / 5xx) are retried up
+    # to PUBLISH_MAX_RETRIES times with backoff. A 4xx (e.g. 422 schema error)
+    # is deterministic — retrying won't help — so we log details and stop.
+    for attempt in range(1, PUBLISH_MAX_RETRIES + 1):
+        try:
+            async with session.post(url, json={"results": results}, headers=_auth_headers(), timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                text = await resp.text()
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    payload = {"raw": text[:500]}
+                data = payload.get("data") or {}
+                published = data.get("published", 0)
+                failed = data.get("failed", 0)
+                status_state["last_publish_count"] = published
+                status_state["last_publish_failed"] = failed
+                print(f"📤 published={published} failed={failed} status={resp.status} (attempt {attempt}/{PUBLISH_MAX_RETRIES})")
+
+                if resp.status < 400:
+                    return  # success
+
+                # Dump the error so we can see the validation/upstream problem.
                 detail = payload.get("detail") if isinstance(payload, dict) else None
                 if isinstance(detail, list):
                     print(f"  ⚠️ HTTP {resp.status} validation errors:")
@@ -233,17 +239,29 @@ async def push_results(session: aiohttp.ClientSession, results: List[Dict[str, A
                         print(f"     ... and {len(detail) - 10} more")
                 else:
                     print(f"  ⚠️ HTTP {resp.status} body: {text[:800]}")
-                # Also dump the offending payload (truncated) so we can compare.
                 try:
                     sample = results[0] if results else {}
                     print(f"  📦 first result payload sample (truncated): "
                           f"{json.dumps({k: sample.get(k) for k in ('execution_id','domain_name','engine','query_type','queue_name','success','is_indexed','error')}, default=str)[:400]}")
                 except Exception:
                     pass
-    except Exception as e:
-        status_state["errors"] += 1
-        status_state["last_error"] = f"push: {e}"
-        print(f"❌ result push error: {e}")
+
+                if resp.status < 500:
+                    # 4xx is deterministic — don't waste retries.
+                    status_state["errors"] += 1
+                    status_state["last_error"] = f"push HTTP {resp.status}"
+                    return
+                # 5xx: fall through to retry.
+        except Exception as e:
+            status_state["errors"] += 1
+            status_state["last_error"] = f"push: {e}"
+            print(f"❌ result push error (attempt {attempt}/{PUBLISH_MAX_RETRIES}): {e}")
+
+        if attempt < PUBLISH_MAX_RETRIES:
+            backoff = min(2 ** attempt, 15)
+            print(f"  ↻ retrying publish in {backoff}s...")
+            await asyncio.sleep(backoff)
+    print(f"❌ publish failed after {PUBLISH_MAX_RETRIES} attempts")
 
 
 async def run_batch_with_addon(jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -31,6 +31,9 @@ const RECONNECT_MAX_MS = 30000;
 const SERP_TAB_TIMEOUT_MS = 90_000;       // hard cap per group tab
 const SERP_QUERY_TIMEOUT_MS = 30_000;      // per-query timeout (informational)
 const TURNSTILE_WAIT_MS = 90_000;          // grace period waiting for solve (Buster audio takes ~30-60s)
+const MAX_BATCH_RETRIES = 7;               // per-batch attempts: if all queries are blocked
+                                           // (captcha/429/no content), re-warm (solve captcha)
+                                           // and retry the whole 100-domain batch up to 7×.
 
 const RT = (typeof browser !== 'undefined' && browser.runtime) ? browser : chrome;
 
@@ -465,38 +468,80 @@ async function runSerpGroup(engine, qtype, jobs) {
   }
 
   try {
+    // Process the batch with up to MAX_BATCH_RETRIES attempts. If an attempt
+    // comes back with ZERO usable results (every query blocked by captcha /
+    // 429 / "no content"), we re-warm the tab — which solves any captcha via
+    // Buster — and retry the whole 100-domain batch. We stop as soon as at
+    // least one query returns a real SERP (indexed OR not-indexed both count
+    // as "page working"), or after 7 attempts.
+    let results = jobs.map((job) => failureResult(job, 'not processed'));
+    for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
+      // Make sure the page is clean before each attempt (solve captcha if any).
+      await ensureCaptchaSolved(tabId);
 
-    // Hand the tab off to the workflow runner. It executes all the actions
-    // (wait_for / delay / if_exists / evaluate ...) and stores the JSON
-    // string returned by the evaluate script under variables.batch_results.
-    const finalVars = await self.runWorkflowOnTab(tabId, workflow, overrides);
-    const rawResults = finalVars.batch_results;
-    const parsed = _parseBatchResults(rawResults);
+      // Hand the tab off to the workflow runner. It executes all the actions
+      // (wait_for / delay / if_exists / evaluate ...) and stores the JSON
+      // string returned by the evaluate script under variables.batch_results.
+      const finalVars = await self.runWorkflowOnTab(tabId, workflow, overrides);
+      const parsed = _parseBatchResults(finalVars.batch_results);
+      results = mapJobsToResults(jobs, qtype, parsed);
 
-    return jobs.map((job) => {
-      const queryStr = qtype === 'index' ? `site:${job.domain_name}` : job.domain_name;
-      const item = parsed.byQuery[queryStr] || parsed.byIndex[jobs.indexOf(job)];
-      if (!item) return failureResult(job, 'no result for query');
-      const decision = decideMatch(job.domain_name, item);
-      if (decision.error) return failureResult(job, decision.error);
-      return {
-        execution_id: job.execution_id,
-        domain_name: job.domain_name,
-        engine: job.engine,
-        query_type: job.query_type,
-        queue_name: job.queue_name,
-        success: true,
-        is_indexed: decision.matched.length > 0,
-        indexed_count: decision.indexed_count,
-        total_results: decision.total_results,
-        matched_hosts: decision.matched.slice(0, 5),
-        error: null,
-        raw: job.raw || {},
-      };
-    });
+      const okCount = results.filter((r) => r.success).length;
+      console.log(`[batch] ${key} attempt ${attempt}/${MAX_BATCH_RETRIES}: ${okCount}/${jobs.length} usable`);
+      if (okCount > 0) break; // page is working — done
+
+      if (attempt < MAX_BATCH_RETRIES) {
+        console.warn(`[batch] ${key} all ${jobs.length} blocked — re-warming tab ${tabId} (solve captcha) and retrying`);
+        await rewarmTab(tabId, engine);
+      } else {
+        console.error(`[batch] ${key} still blocked after ${MAX_BATCH_RETRIES} attempts — returning failures`);
+      }
+    }
+    return results;
   } finally {
     try { await RT.tabs.remove(tabId); } catch (_) { /* gone */ }
   }
+}
+
+// Map each job to a result object using the parsed SERP batch results.
+function mapJobsToResults(jobs, qtype, parsed) {
+  return jobs.map((job) => {
+    const queryStr = qtype === 'index' ? `site:${job.domain_name}` : job.domain_name;
+    const item = parsed.byQuery[queryStr] || parsed.byIndex[jobs.indexOf(job)];
+    if (!item) return failureResult(job, 'no result for query');
+    const decision = decideMatch(job.domain_name, item);
+    if (decision.error) return failureResult(job, decision.error);
+    return {
+      execution_id: job.execution_id,
+      domain_name: job.domain_name,
+      engine: job.engine,
+      query_type: job.query_type,
+      queue_name: job.queue_name,
+      success: true,
+      is_indexed: decision.matched.length > 0,
+      indexed_count: decision.indexed_count,
+      total_results: decision.total_results,
+      matched_hosts: decision.matched.slice(0, 5),
+      error: null,
+      raw: job.raw || {},
+    };
+  });
+}
+
+// Re-warm an existing tab between retry attempts: reload the hello SERP and
+// solve any captcha (Buster). Used when a whole batch came back blocked.
+async function rewarmTab(tabId, engine) {
+  const warmupUrl = engine === 'google'
+    ? 'https://www.google.com/search?q=hello'
+    : 'https://www.bing.com/search?q=hello';
+  try {
+    await RT.tabs.update(tabId, { url: warmupUrl, active: true });
+    await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
+  } catch (e) {
+    console.warn('[batch] rewarm navigation failed:', e && e.message);
+  }
+  await ensureCaptchaSolved(tabId);
+  await new Promise((r) => setTimeout(r, 1500));
 }
 
 function _parseBatchResults(raw) {
