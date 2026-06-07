@@ -13,6 +13,9 @@ env:
   # server.py mode: 'local' (file-based: domains.txt -> results.json) or 'prod'
   # prod -> pulls jobs from b-domain.articleinnovator.com and posts results back.
   SERP_MODE: "prod"
+  # server.py log: streamed live into the Actions console, symlinked onto the
+  # VNC Desktop as serp-logs.txt, and uploaded as an artifact at the end.
+  LOG_FILE: "/home/runner/serp-logs.txt"
 
 jobs:
   run:
@@ -138,9 +141,15 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install --no-cache-dir -r requirements.txt
-          nohup python3 server.py --mode "${SERP_MODE}" > /tmp/serp-server.log 2>&1 &
+          # -u = unbuffered so the log updates live. Logs go to $LOG_FILE, which
+          # is symlinked onto the VNC Desktop as serp-logs.txt and uploaded as an
+          # artifact at the end — easy to grab and share.
+          : > "$LOG_FILE"
+          mkdir -p /home/runner/Desktop
+          ln -sf "$LOG_FILE" /home/runner/Desktop/serp-logs.txt
+          nohup python3 -u server.py --mode "${SERP_MODE}" > "$LOG_FILE" 2>&1 &
           SERVER_PID=$!
-          echo "server.py PID: $SERVER_PID"
+          echo "server.py PID: $SERVER_PID (log: $LOG_FILE, Desktop/serp-logs.txt)"
 
           # Wait for the WebSocket port (8765) to start listening
           UP=0
@@ -153,11 +162,11 @@ jobs:
           done
 
           if ! kill -0 $SERVER_PID 2>/dev/null; then
-            echo "❌ server.py exited on startup:"; cat /tmp/serp-server.log; exit 1
+            echo "❌ server.py exited on startup:"; cat $LOG_FILE; exit 1
           fi
           if [ "$UP" != "1" ]; then
             echo "⚠️ server.py running but :8765 not detected yet; addon will retry. Log:"
-            tail -20 /tmp/serp-server.log || true
+            tail -20 $LOG_FILE || true
           fi
 
       - name: Configure VNC Server
@@ -265,7 +274,7 @@ jobs:
             echo "✅ server.py is running (addon should show GREEN icon = Connected)"
           else
             echo "❌ server.py is NOT running — addon icon will stay grey. Log:"
-            tail -20 /tmp/serp-server.log 2>/dev/null || true
+            tail -20 $LOG_FILE 2>/dev/null || true
           fi
 
       - name: Display Connection Info
@@ -322,12 +331,27 @@ jobs:
               echo "server.py stopped! Restarting (mode: ${SERP_MODE})..."
               cd "$GITHUB_WORKSPACE"
               source .venv/bin/activate
-              nohup python3 server.py --mode "${SERP_MODE}" > /tmp/serp-server.log 2>&1 &
+              nohup python3 -u server.py --mode "${SERP_MODE}" > "$LOG_FILE" 2>&1 &
               sleep 3
             fi
 
+            # Keep the Desktop shortcut valid and STREAM the latest server.py
+            # log into the Actions console so it's easy to copy/share.
+            ln -sf "$LOG_FILE" /home/runner/Desktop/serp-logs.txt 2>/dev/null || true
+            echo "------ server.py log (last 25 lines) ------"
+            tail -n 25 "$LOG_FILE" 2>/dev/null || echo "(no log yet)"
+            echo "-------------------------------------------"
+
             sleep 30
           done
+
+      - name: Upload server.py log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serp-logs
+          path: /home/runner/serp-logs.txt
+          if-no-files-found: warn
 
       - name: Cleanup VNC
         if: always()
