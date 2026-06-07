@@ -151,10 +151,13 @@ jobs:
           SERVER_PID=$!
           echo "server.py PID: $SERVER_PID (log: $LOG_FILE, Desktop/serp-logs.txt)"
 
-          # Wait for the WebSocket port (8765) to start listening
+          # Wait for the WebSocket port (8765) to start listening. Use a
+          # passive listening check (ss) instead of opening a TCP connection —
+          # connecting without a WebSocket handshake makes server.py log a
+          # handshake-error traceback.
           UP=0
           for i in $(seq 1 20); do
-            if (echo > /dev/tcp/127.0.0.1/8765) >/dev/null 2>&1; then
+            if ss -ltn 2>/dev/null | grep -q ':8765 '; then
               echo "✅ server.py WebSocket listening on :8765 (after ${i}s)"
               UP=1; break
             fi

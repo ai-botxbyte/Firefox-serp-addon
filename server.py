@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 import uuid
@@ -200,6 +201,8 @@ async def pull_jobs(session: aiohttp.ClientSession) -> List[Dict[str, Any]]:
     status_state["last_pull_count"] = len(jobs)
     if jobs:
         print(f"📥 pulled {len(jobs)} job(s)")
+    else:
+        print("📭 pull returned 0 jobs (queue empty) — nothing to process")
     return jobs
 
 
@@ -542,6 +545,11 @@ async def status_handler(_req):
 
 
 async def main():
+    # Silence noisy WebSocket handshake tracebacks. These fire when something
+    # opens a plain TCP connection to the WS port without a WebSocket
+    # handshake (port-readiness probes, scanners). They're harmless — the real
+    # addon connects fine — but the stack traces clutter the log.
+    logging.getLogger("websockets").setLevel(logging.CRITICAL)
     print(f"🚀 mode: {MODE.upper()}")
     print(f"🔌 ws://localhost:{WS_PORT} (Firefox addon)")
     print(f"🌐 http://localhost:{HTTP_PORT}/status")
