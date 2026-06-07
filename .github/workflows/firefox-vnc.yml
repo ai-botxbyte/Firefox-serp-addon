@@ -10,6 +10,8 @@ env:
   VNC_PASSWORD: "botxbyte123"
   PORTABLE_DIR: "/home/runner/firefox-portable"
   ADDON_ID: "serp-puller@botxbyte.com"
+  # server.py mode: 'local' (file-based: domains.txt -> results.json) or 'prod'
+  SERP_MODE: "local"
 
 jobs:
   run:
@@ -19,6 +21,11 @@ jobs:
     steps:
       - name: Checkout addon repo
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Optimize APT mirror
         timeout-minutes: 3
@@ -120,6 +127,38 @@ jobs:
           echo "Portable Firefox assembled at $PORTABLE_DIR"
           unzip -l "$PORTABLE_DIR/extensions/${ADDON_ID}.xpi" | grep manifest.json
 
+      - name: Start SERP server.py
+        run: |
+          # The addon is just a WebSocket client — it connects to server.py on
+          # ws://127.0.0.1:8765. Without server.py the toolbar icon stays grey
+          # and nothing happens. Start it here so the addon connects (icon green).
+          echo "Starting server.py (mode=${SERP_MODE})..."
+          cd "$GITHUB_WORKSPACE"
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --no-cache-dir -r requirements.txt
+          nohup python3 server.py --mode "${SERP_MODE}" > /tmp/serp-server.log 2>&1 &
+          SERVER_PID=$!
+          echo "server.py PID: $SERVER_PID"
+
+          # Wait for the WebSocket port (8765) to start listening
+          UP=0
+          for i in $(seq 1 20); do
+            if (echo > /dev/tcp/127.0.0.1/8765) >/dev/null 2>&1; then
+              echo "✅ server.py WebSocket listening on :8765 (after ${i}s)"
+              UP=1; break
+            fi
+            sleep 1
+          done
+
+          if ! kill -0 $SERVER_PID 2>/dev/null; then
+            echo "❌ server.py exited on startup:"; cat /tmp/serp-server.log; exit 1
+          fi
+          if [ "$UP" != "1" ]; then
+            echo "⚠️ server.py running but :8765 not detected yet; addon will retry. Log:"
+            tail -20 /tmp/serp-server.log || true
+          fi
+
       - name: Configure VNC Server
         run: |
           export PATH=$PATH:/opt/TurboVNC/bin
@@ -219,6 +258,15 @@ jobs:
             echo "⚠️ Addon not detected yet; check the Firefox window in VNC."
           fi
 
+          # The toolbar icon turns green only once the addon connects to server.py.
+          echo "--- server.py status ---"
+          if pgrep -f "server.py" > /dev/null; then
+            echo "✅ server.py is running (addon should show GREEN icon = Connected)"
+          else
+            echo "❌ server.py is NOT running — addon icon will stay grey. Log:"
+            tail -20 /tmp/serp-server.log 2>/dev/null || true
+          fi
+
       - name: Display Connection Info
         run: |
           echo ""
@@ -229,8 +277,13 @@ jobs:
           echo "VNC Access URL: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html"
           echo "Password: ${VNC_PASSWORD}"
           echo ""
-          echo "Firefox ESR is running with addon: ${ADDON_ID}"
-          echo "Open the URL above, connect, and confirm Firefox + your addon."
+          echo "Firefox ESR running with addon: ${ADDON_ID}"
+          echo "server.py running in mode: ${SERP_MODE}  (WebSocket :8765)"
+          echo ""
+          echo "What to confirm in VNC:"
+          echo "  1. Firefox is open with the SERP Puller addon installed"
+          echo "  2. The toolbar icon is GREEN (popup says 'Connected to server.py')"
+          echo "  3. In --mode local it processes domains.txt -> results.json"
           echo ""
 
       - name: Keep Session Alive
@@ -263,6 +316,15 @@ jobs:
               sleep 3
             fi
 
+            # Restart server.py if it died (addon needs it to do anything)
+            if ! pgrep -f "server.py" > /dev/null; then
+              echo "server.py stopped! Restarting (mode: ${SERP_MODE})..."
+              cd "$GITHUB_WORKSPACE"
+              source .venv/bin/activate
+              nohup python3 server.py --mode "${SERP_MODE}" > /tmp/serp-server.log 2>&1 &
+              sleep 3
+            fi
+
             sleep 30
           done
 
@@ -271,6 +333,7 @@ jobs:
         timeout-minutes: 1
         run: |
           export PATH=$PATH:/opt/TurboVNC/bin
+          pkill -f "server.py" || true
           pkill -f "firefox" || true
           pkill -x cloudflared || true
           vncserver -kill :1 || true
