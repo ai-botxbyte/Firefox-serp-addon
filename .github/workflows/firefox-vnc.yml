@@ -16,6 +16,12 @@ env:
   # server.py log: streamed live into the Actions console, symlinked onto the
   # VNC Desktop as serp-logs.txt, and uploaded as an artifact at the end.
   LOG_FILE: "/home/runner/serp-logs.txt"
+  # Rotating proxy: Firefox routes Google traffic through a LOCAL no-auth relay
+  # (gost) on 127.0.0.1:$LOCAL_PROXY_PORT, which forwards to this authenticated
+  # upstream. (server.py -> articleinnovator.com stays DIRECT.)
+  # NOTE: requires webshare "Username & Password" auth mode (not IP auth).
+  PROXY_UPSTREAM: "http://tjijutki-rotate:4vg93ifc50gnx@p.webshare.io:80"
+  LOCAL_PROXY_PORT: "3128"
 
 jobs:
   run:
@@ -100,11 +106,21 @@ jobs:
           pref("general.config.obscure_value", 0);
           EOF
 
-          # autoconfig.cfg -> disable signature enforcement (allow unsigned addon)
-          cat > "$FIREFOX_DIR/autoconfig.cfg" << 'EOF'
+          # autoconfig.cfg -> disable signature enforcement + route through the
+          # local proxy relay (so Google goes via the rotating proxy). localhost
+          # is excluded so the addon<->server.py WebSocket stays direct.
+          cat > "$FIREFOX_DIR/autoconfig.cfg" << EOF
           // First line must be a comment
           defaultPref("xpinstall.signatures.required", false);
           defaultPref("extensions.langpacks.signatures.required", false);
+          defaultPref("network.proxy.type", 1);
+          defaultPref("network.proxy.http", "127.0.0.1");
+          defaultPref("network.proxy.http_port", ${LOCAL_PROXY_PORT});
+          defaultPref("network.proxy.ssl", "127.0.0.1");
+          defaultPref("network.proxy.ssl_port", ${LOCAL_PROXY_PORT});
+          defaultPref("network.proxy.socks_remote_dns", true);
+          defaultPref("network.proxy.no_proxies_on", "localhost, 127.0.0.1");
+          defaultPref("network.proxy.allow_hijacking_localhost", true);
           EOF
 
           # Package the addon (repo root) into an XPI
@@ -170,6 +186,34 @@ jobs:
           if [ "$UP" != "1" ]; then
             echo "⚠️ server.py running but :8765 not detected yet; addon will retry. Log:"
             tail -20 $LOG_FILE || true
+          fi
+
+      - name: Start rotating proxy relay (gost)
+        run: |
+          # Firefox can't use an authenticated proxy without a login popup, so
+          # we run a LOCAL no-auth relay that forwards to the authenticated
+          # rotating upstream. Firefox -> 127.0.0.1:$LOCAL_PROXY_PORT -> webshare.
+          echo "Installing gost..."
+          GOST_VER=2.11.5
+          curl -L -o /tmp/gost.gz "https://github.com/ginuerzh/gost/releases/download/v${GOST_VER}/gost-linux-amd64-${GOST_VER}.gz"
+          gunzip -f /tmp/gost.gz
+          chmod +x /tmp/gost
+          sudo mv /tmp/gost /usr/local/bin/gost
+
+          echo "Starting relay 127.0.0.1:${LOCAL_PROXY_PORT} -> rotating upstream..."
+          nohup gost -L="http://:${LOCAL_PROXY_PORT}" -F="${PROXY_UPSTREAM}" > /tmp/gost.log 2>&1 &
+          sleep 2
+
+          # Verify the relay routes traffic (and shows a rotating IP). Non-fatal:
+          # if webshare rejects auth (407), warn but keep the session up.
+          echo "Direct IP:  $(curl -s --max-time 15 https://api.ipify.org || echo '?')"
+          PROXIED_IP=$(curl -s --max-time 25 -x "http://127.0.0.1:${LOCAL_PROXY_PORT}" https://api.ipify.org || true)
+          if [ -n "$PROXIED_IP" ]; then
+            echo "✅ Proxied IP: $PROXIED_IP — Google traffic will use the rotating proxy"
+          else
+            echo "⚠️ Relay returned no IP — likely webshare auth (407)."
+            echo "   Fix: enable 'Username & Password' auth in the webshare dashboard."
+            echo "   gost log:"; tail -20 /tmp/gost.log || true
           fi
 
       - name: Configure VNC Server
@@ -329,6 +373,13 @@ jobs:
               sleep 3
             fi
 
+            # Restart the proxy relay if it died (Firefox depends on it)
+            if ! pgrep -x "gost" > /dev/null; then
+              echo "Proxy relay (gost) stopped! Restarting..."
+              nohup gost -L="http://:${LOCAL_PROXY_PORT}" -F="${PROXY_UPSTREAM}" > /tmp/gost.log 2>&1 &
+              sleep 2
+            fi
+
             # Restart server.py if it died (addon needs it to do anything)
             if ! pgrep -f "server.py" > /dev/null; then
               echo "server.py stopped! Restarting (mode: ${SERP_MODE})..."
@@ -362,6 +413,7 @@ jobs:
         run: |
           export PATH=$PATH:/opt/TurboVNC/bin
           pkill -f "server.py" || true
+          pkill -x gost || true
           pkill -f "firefox" || true
           pkill -x cloudflared || true
           vncserver -kill :1 || true
