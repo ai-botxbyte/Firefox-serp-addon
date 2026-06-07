@@ -362,10 +362,10 @@ async function runSerpGroup(engine, qtype, jobs) {
     ? 'https://www.google.com/search?q=hello'
     : 'https://www.bing.com/search?q=hello';
   console.log(`[batch] warmup: opening ${warmupUrl}`);
-  // active:false + discarded:false → tab loads in background but is NOT lazy.
-  // (Firefox would otherwise hold the tab at about:blank and scripting.executeScript
-  //  fails with "Missing host permission for the tab" because about:blank is privileged.)
-  const tab = await RT.tabs.create({ url: warmupUrl, active: false, discarded: false });
+  // active:true → tab loads in the FOREGROUND so it's visible (e.g. in VNC)
+  // and is never held lazy/parked on about:blank (which would make
+  // scripting.executeScript fail with "Missing host permission for the tab").
+  const tab = await RT.tabs.create({ url: warmupUrl, active: true, discarded: false });
   const tabId = tab.id;
 
   try {
@@ -380,7 +380,7 @@ async function runSerpGroup(engine, qtype, jobs) {
       || cur.url === 'chrome://newtab/';
     if (onPrivileged) {
       console.warn(`[batch] tab ${tabId} parked at ${cur && cur.url} — forcing navigation to ${warmupUrl}`);
-      await RT.tabs.update(tabId, { url: warmupUrl, active: false });
+      await RT.tabs.update(tabId, { url: warmupUrl, active: true });
       await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
       // Wait until the URL is actually no longer about:* (status:complete is not enough).
       const start = Date.now();
