@@ -335,7 +335,7 @@ function failureResult(job, errorMessage) {
     queue_name: job.queue_name,
     success: false,
     is_indexed: null,
-    serp_result_count: 0,
+    serp_result_count: -1,
     indexed_count: 0,
     total_results: 0,
     matched_hosts: [],

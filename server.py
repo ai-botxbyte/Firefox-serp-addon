@@ -404,7 +404,7 @@ async def poll_loop():
                     # number, commas stripped) so it's visible in the workflow log.
                     for r in results:
                         dom = r.get("domain_name", "?")
-                        cnt = r.get("serp_result_count", 0)
+                        cnt = r.get("serp_result_count", -1)
                         if r.get("success"):
                             flag = "indexed" if r.get("is_indexed") else "not-indexed"
                             print(f"   {dom} - {cnt}  ({flag})")
