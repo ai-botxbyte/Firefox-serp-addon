@@ -7,11 +7,15 @@
 //
 // The CI workflow regenerates this file from plaintext env vars at build time;
 // the committed values below are the defaults used for local/portable runs.
+// Proxy is used in IP-AUTHORIZATION mode (no username/password) — the
+// runner/host IP is authorized on webshare, so Firefox connects to
+// p.webshare.io:9999 with no credentials. PROXY_AUTH is left blank; the
+// onAuthRequired handler stays unregistered when there's no username.
 self.PROXY_AUTH = {
   host: "p.webshare.io",
-  port: 80,
-  username: "tjijutki-rotate",
-  password: "4vg93ifc50gnx",
+  port: 9999,
+  username: "",
+  password: "",
 };
 
 // 2captcha API key — used ONLY as a fallback when the reCAPTCHA audio

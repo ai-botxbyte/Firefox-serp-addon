@@ -20,10 +20,15 @@ env:
   # supplied automatically by the addon (webRequest.onAuthRequired), since
   # Firefox prefs can't carry proxy auth. Plaintext by request.
   # (server.py -> articleinnovator.com stays DIRECT.)
+  # Rotating proxy via IP AUTHORIZATION (no username/password). The runner's
+  # public IP is authorized on webshare at job start and removed at job end.
+  # Backbone IP-auth uses port 9999 (port 80 is username/password only).
+  # (server.py -> articleinnovator.com stays DIRECT.)
   PROXY_HOST: "p.webshare.io"
-  PROXY_PORT: "80"
-  PROXY_USER: "tjijutki-rotate"
-  PROXY_PASS: "4vg93ifc50gnx"
+  PROXY_PORT: "9999"
+  PROXY_USER: ""
+  PROXY_PASS: ""
+  WEBSHARE_API_KEY: "9ulqjlekme1514dwfi7p6lwm9kmvygshn5brii5s"
   # 2captcha API key — fallback captcha solver used ONLY when the reCAPTCHA
   # audio challenge has no play button (audio blocked). Plaintext by request.
   TWOCAPTCHA_API_KEY: "cc659aa1b0cff87b80e3969a281f8d3f"
@@ -41,6 +46,28 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Authorize runner IP on webshare
+        run: |
+          # IP-authorization proxy: authorize this runner's public IP so the
+          # backbone proxy (p.webshare.io:9999) works with NO credentials.
+          MYIP=$(curl -s --max-time 20 -H "Authorization: Token ${WEBSHARE_API_KEY}" \
+            https://proxy.webshare.io/api/v2/proxy/ipauthorization/whatsmyip/ | jq -r '.ip_address // empty')
+          [ -z "$MYIP" ] && MYIP=$(curl -s --max-time 20 https://api.ipify.org)
+          echo "Runner public IP: $MYIP"
+          RESP=$(curl -s --max-time 30 -X POST https://proxy.webshare.io/api/v2/proxy/ipauthorization/ \
+            -H "Authorization: Token ${WEBSHARE_API_KEY}" -H "Content-Type: application/json" \
+            -d "{\"ip_address\": \"$MYIP\"}")
+          IPAUTH_ID=$(echo "$RESP" | jq -r '.id // empty')
+          if [ -z "$IPAUTH_ID" ]; then
+            echo "Create response: $RESP"
+            # Maybe already authorized (e.g. a prior cancelled run) — find it.
+            IPAUTH_ID=$(curl -s -H "Authorization: Token ${WEBSHARE_API_KEY}" \
+              "https://proxy.webshare.io/api/v2/proxy/ipauthorization/" \
+              | jq -r --arg ip "$MYIP" '.results[]? | select(.ip_address==$ip) | .id' | head -1)
+          fi
+          echo "WS_IPAUTH_ID=$IPAUTH_ID" >> "$GITHUB_ENV"
+          echo "Authorized IP $MYIP -> ipauthorization id=$IPAUTH_ID"
 
       - name: Optimize APT mirror
         timeout-minutes: 3
@@ -211,18 +238,21 @@ jobs:
 
       - name: Verify proxy
         run: |
-          # Firefox is pointed directly at the rotating proxy; confirm the
-          # credentials authenticate and the IP rotates. Non-fatal.
-          echo "Proxy: ${PROXY_HOST}:${PROXY_PORT}"
-          PURL="http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}"
+          # Firefox is pointed directly at the rotating proxy; confirm it works
+          # and the IP rotates. With IP-auth there are no credentials.
+          echo "Proxy: ${PROXY_HOST}:${PROXY_PORT} (IP-auth, no creds)"
+          if [ -n "$PROXY_USER" ]; then
+            PURL="http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}"
+          else
+            PURL="http://${PROXY_HOST}:${PROXY_PORT}"
+          fi
           echo "Direct IP:  $(curl -s --max-time 15 https://api.ipify.org || echo '?')"
           P1=$(curl -s --max-time 25 -x "$PURL" https://api.ipify.org || true)
           P2=$(curl -s --max-time 25 -x "$PURL" https://api.ipify.org || true)
           if [ -n "$P1" ]; then
-            echo "✅ Proxy OK — IPs: $P1 / $P2 (Firefox will use ${PROXY_HOST}:${PROXY_PORT})"
+            echo "✅ Proxy OK — rotating IPs: $P1 / $P2 (Firefox will use ${PROXY_HOST}:${PROXY_PORT})"
           else
-            echo "⚠️ Proxy returned no IP (auth/connectivity issue). Firefox is still"
-            echo "   configured for it; check webshare username/password auth."
+            echo "⚠️ Proxy returned no IP. Check the runner IP was authorized on webshare."
           fi
 
       - name: Configure VNC Server
@@ -418,4 +448,12 @@ jobs:
           pkill -f "firefox" || true
           pkill -x cloudflared || true
           vncserver -kill :1 || true
+          # Remove this runner's IP authorization from webshare. Runs on
+          # success, failure, AND cancel (if: always()).
+          if [ -n "$WS_IPAUTH_ID" ]; then
+            echo "Removing webshare IP authorization id=$WS_IPAUTH_ID..."
+            curl -s -o /dev/null -w "ipauth delete status=%{http_code}\n" -X DELETE \
+              -H "Authorization: Token ${WEBSHARE_API_KEY}" \
+              "https://proxy.webshare.io/api/v2/proxy/ipauthorization/${WS_IPAUTH_ID}/" || true
+          fi
           echo "Cleanup complete"
