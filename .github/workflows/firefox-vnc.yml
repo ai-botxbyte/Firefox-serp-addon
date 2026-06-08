@@ -399,8 +399,12 @@ jobs:
           echo "            FIREFOX ADDON VNC IS RUNNING!"
           echo "================================================================"
           echo ""
-          echo "One-click VNC (auto-connects, password pre-filled):"
-          echo "${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSWORD}"
+          # Percent-encode every char of the password so the literal value
+          # never appears in the log (GitHub masks registered secrets, which
+          # would break the copyable URL). noVNC decodes %XX back to the password.
+          ENC_PW=$(printf '%s' "${VNC_PASSWORD}" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
+          echo "One-click VNC (auto-connects, password pre-filled, local scaling):"
+          echo "${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${ENC_PW}"
           echo ""
           echo "Firefox ESR running with addon: ${ADDON_ID}"
           echo "server.py running in mode: ${SERP_MODE}  (WebSocket :8765)"
@@ -411,9 +415,10 @@ jobs:
           export PATH=$PATH:/opt/TurboVNC/bin
           set +e
           echo "Keeping VNC session alive..."
+          ENC_PW=$(printf '%s' "${VNC_PASSWORD}" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
 
           while true; do
-            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSWORD}"
+            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${ENC_PW}"
 
             # Restart VNC if it died (xstartup relaunches Firefox automatically)
             if ! pgrep -f "Xvnc.*:1" > /dev/null; then

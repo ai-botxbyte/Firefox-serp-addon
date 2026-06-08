@@ -496,8 +496,10 @@ async function settleOffSorry(tabId, cleanUrl) {
       await RT.tabs.update(tabId, { url: cleanUrl, active: true });
       await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
     } catch (e) { /* keep trying */ }
-    await ensureCaptchaSolved(tabId);
-    await new Promise((r) => setTimeout(r, 800));
+    // Quick settle only — a clean IP loads the SERP without a challenge. We do
+    // NOT run the long captcha solve here (that would blow the warmup timeout);
+    // any captcha on the final IP is handled by the batch's ensureCaptchaSolved.
+    await new Promise((r) => setTimeout(r, 2000));
   }
   let u = '';
   try { const t = await RT.tabs.get(tabId); u = (t && t.url) || ''; } catch (e) {}
