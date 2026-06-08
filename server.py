@@ -400,6 +400,16 @@ async def poll_loop():
                     continue
                 results = await run_batch_with_addon(jobs)
                 if results:
+                    # Log each domain's SERP index count (the "About X results"
+                    # number, commas stripped) so it's visible in the workflow log.
+                    for r in results:
+                        dom = r.get("domain_name", "?")
+                        cnt = r.get("serp_result_count", 0)
+                        if r.get("success"):
+                            flag = "indexed" if r.get("is_indexed") else "not-indexed"
+                            print(f"   {dom} - {cnt}  ({flag})")
+                        else:
+                            print(f"   {dom} - {cnt}  (failed: {r.get('error')})")
                     await push_results(session, results)
             except Exception as e:
                 status_state["errors"] += 1
