@@ -448,7 +448,7 @@ jobs:
             # Keep the Desktop shortcut valid and STREAM the latest server.py
             # log into the Actions console so it's easy to copy/share.
             ln -sf "$LOG_FILE" /home/runner/Desktop/serp-logs.txt 2>/dev/null || true
-            echo "------ server.py log (last 25 lines) ------"
+            echo "------ server.py log (last 25 lines) @ $(date -u +%H:%M:%SZ) ------"
             tail -n 25 "$LOG_FILE" 2>/dev/null || echo "(no log yet)"
             echo "-------------------------------------------"
 

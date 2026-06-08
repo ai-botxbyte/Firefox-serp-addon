@@ -45,6 +45,15 @@ import aiohttp
 from aiohttp import web
 import websockets
 
+# Prefix every log line with an ISO timestamp so progress is traceable.
+import builtins as _builtins
+from datetime import datetime as _dt
+
+
+def print(*args, **kwargs):  # noqa: A001 - intentional module-level shadow
+    ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    _builtins.print(f"[{ts}]", *args, **kwargs)
+
 # Audio reCAPTCHA solving is delegated to the Buster Firefox extension —
 # the user explicitly does NOT want a local Whisper model bundled here.
 # Buster runs IN Firefox alongside this addon and solves audio challenges
