@@ -18,11 +18,14 @@
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",
     "webNavigation",
-    "cookies"
+    "cookies",
+    "webRequest",
+    "webRequestBlocking",
+    "proxy"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
-    "scripts": ["workflow_runner.js", "background.js"]
+    "scripts": ["proxy-config.js", "workflow_runner.js", "background.js"]
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src ws://127.0.0.1:8765 ws://localhost:8765 http://127.0.0.1:8210 http://localhost:8210 https://*"

@@ -37,6 +37,31 @@ const MAX_BATCH_RETRIES = 7;               // per-batch attempts: if all queries
 
 const RT = (typeof browser !== 'undefined' && browser.runtime) ? browser : chrome;
 
+// --- Proxy authentication ----------------------------------------------------
+// Firefox's proxy is set directly to the rotating proxy (p.webshare.io:80) via
+// the profile prefs, but Firefox can't carry proxy credentials in prefs — it
+// would pop up a login dialog and freeze the automated session. So we supply
+// the username/password automatically whenever the proxy challenges (407).
+// Credentials come from proxy-config.js (self.PROXY_AUTH).
+try {
+  if (self.PROXY_AUTH && RT.webRequest && RT.webRequest.onAuthRequired) {
+    RT.webRequest.onAuthRequired.addListener(
+      (details) => {
+        if (details && details.isProxy) {
+          console.log('[proxy] supplying credentials for proxy auth challenge');
+          return { authCredentials: { username: self.PROXY_AUTH.username, password: self.PROXY_AUTH.password } };
+        }
+        return {}; // not a proxy challenge — leave site auth alone
+      },
+      { urls: ['<all_urls>'] },
+      ['blocking']
+    );
+    console.log(`[proxy] onAuthRequired handler registered for ${self.PROXY_AUTH.host}:${self.PROXY_AUTH.port}`);
+  }
+} catch (e) {
+  console.warn('[proxy] could not register onAuthRequired handler:', e && e.message);
+}
+
 let ws = null;
 let wsReconnectDelay = RECONNECT_BASE_MS;
 let wsConnected = false;
