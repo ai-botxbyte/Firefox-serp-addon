@@ -157,6 +157,32 @@ jobs:
           defaultPref("network.proxy.socks_remote_dns", true);
           defaultPref("network.proxy.no_proxies_on", "localhost, 127.0.0.1");
           defaultPref("network.proxy.allow_hijacking_localhost", true);
+          // Disable Firefox's own startup network requests so nothing hits the
+          // proxy before the addon loads (those 407s would pop a login dialog).
+          defaultPref("network.captive-portal-service.enabled", false);
+          defaultPref("captivedetect.canonicalURL", "");
+          defaultPref("network.connectivity-service.enabled", false);
+          defaultPref("toolkit.telemetry.enabled", false);
+          defaultPref("toolkit.telemetry.unified", false);
+          defaultPref("datareporting.healthreport.uploadEnabled", false);
+          defaultPref("datareporting.policy.dataSubmissionEnabled", false);
+          defaultPref("app.normandy.enabled", false);
+          defaultPref("app.shield.optoutstudies.enabled", false);
+          defaultPref("browser.safebrowsing.malware.enabled", false);
+          defaultPref("browser.safebrowsing.phishing.enabled", false);
+          defaultPref("browser.safebrowsing.downloads.enabled", false);
+          defaultPref("browser.discovery.enabled", false);
+          defaultPref("browser.region.network.url", "");
+          defaultPref("browser.region.update.enabled", false);
+          defaultPref("services.settings.server", "");
+          defaultPref("browser.newtabpage.activity-stream.feeds.telemetry", false);
+          defaultPref("browser.newtabpage.activity-stream.telemetry", false);
+          defaultPref("browser.startup.homepage", "about:blank");
+          defaultPref("browser.startup.page", 0);
+          defaultPref("extensions.getAddons.cache.enabled", false);
+          defaultPref("network.prefetch-next", false);
+          // Don't prompt for HTTP/proxy auth in a way that blocks the UI.
+          defaultPref("network.auth.confirmAuth.enabled", false);
           EOF
 
           # Inject the proxy credentials + 2captcha key into the addon so its
