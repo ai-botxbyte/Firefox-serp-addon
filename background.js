@@ -64,6 +64,40 @@ try {
   console.warn('[proxy] could not register onAuthRequired handler:', e && e.message);
 }
 
+// --- Proxy routing: STICKY exit IP per batch --------------------------------
+// webshare backbone IP-auth: port 9999 rotates the exit IP on EVERY request,
+// which breaks Google's per-IP abuse exemption — the warmup earns an exemption
+// bound to one IP, but rotated fetches come from other IPs and all get /sorry/.
+// Ports 10000-19999 are STICKY (one port = one fixed exit IP). So we pick ONE
+// sticky port per batch: the warmup + all 100 fetches share a single exit IP
+// (exemption valid), and each new batch / retry picks a fresh sticky IP.
+const PROXY_HOST_CFG = (self.PROXY_AUTH && self.PROXY_AUTH.host) || 'p.webshare.io';
+const STICKY_PORT_MIN = 10000;
+const STICKY_PORT_MAX = 19999;
+let currentProxyPort = STICKY_PORT_MIN + Math.floor(Math.random() * (STICKY_PORT_MAX - STICKY_PORT_MIN + 1));
+function rotateProxyPort() {
+  currentProxyPort = STICKY_PORT_MIN + Math.floor(Math.random() * (STICKY_PORT_MAX - STICKY_PORT_MIN + 1));
+  console.log(`[proxy] sticky exit port for this batch: ${currentProxyPort}`);
+  return currentProxyPort;
+}
+try {
+  if (RT.proxy && RT.proxy.onRequest) {
+    RT.proxy.onRequest.addListener(
+      (req) => {
+        try {
+          const h = new URL(req.url).hostname;
+          if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return { type: 'direct' };
+        } catch (e) {}
+        return { type: 'http', host: PROXY_HOST_CFG, port: currentProxyPort };
+      },
+      { urls: ['<all_urls>'] }
+    );
+    console.log('[proxy] proxy.onRequest registered — sticky-port rotation active');
+  }
+} catch (e) {
+  console.warn('[proxy] proxy.onRequest registration failed:', e && e.message);
+}
+
 let ws = null;
 let wsReconnectDelay = RECONNECT_BASE_MS;
 let wsConnected = false;
@@ -399,6 +433,8 @@ function decideMatch(domain, queryResult) {
 // DOES, solving it here once makes the resulting cookies (NID/CONSENT/SID…)
 // carry the "trusted" token through every subsequent in-page fetch().
 async function prepareWarmTab(engine) {
+  // Pick a fresh sticky exit IP for this batch (warmup + all its fetches share it).
+  rotateProxyPort();
   const warmupUrl = engine === 'google'
     ? 'https://www.google.com/search?q=hello'
     : 'https://www.bing.com/search?q=hello';
@@ -558,6 +594,8 @@ function mapJobsToResults(jobs, qtype, parsed) {
 // Re-warm an existing tab between retry attempts: reload the hello SERP and
 // solve any captcha (Buster). Used when a whole batch came back blocked.
 async function rewarmTab(tabId, engine) {
+  // Fresh sticky exit IP for the retry (the previous one may be blocked).
+  rotateProxyPort();
   const warmupUrl = engine === 'google'
     ? 'https://www.google.com/search?q=hello'
     : 'https://www.bing.com/search?q=hello';

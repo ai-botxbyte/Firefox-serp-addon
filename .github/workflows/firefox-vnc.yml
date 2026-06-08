@@ -22,10 +22,13 @@ env:
   # (server.py -> articleinnovator.com stays DIRECT.)
   # Rotating proxy via IP AUTHORIZATION (no username/password). The runner's
   # public IP is authorized on webshare at job start and removed at job end.
-  # Backbone IP-auth uses port 9999 (port 80 is username/password only).
+  # Port 10000-19999 are STICKY (one port = one fixed exit IP); the addon picks
+  # a fresh sticky port PER BATCH via proxy.onRequest so the warmup + its 100
+  # fetches share one IP (Google abuse-exemption stays valid). 10000 is just the
+  # baseline; port 9999 rotates per-request and must NOT be used (breaks exemption).
   # (server.py -> articleinnovator.com stays DIRECT.)
   PROXY_HOST: "p.webshare.io"
-  PROXY_PORT: "9999"
+  PROXY_PORT: "10000"
   PROXY_USER: ""
   PROXY_PASS: ""
   WEBSHARE_API_KEY: "9ulqjlekme1514dwfi7p6lwm9kmvygshn5brii5s"

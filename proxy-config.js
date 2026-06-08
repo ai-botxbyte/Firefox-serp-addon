@@ -13,7 +13,7 @@
 // onAuthRequired handler stays unregistered when there's no username.
 self.PROXY_AUTH = {
   host: "p.webshare.io",
-  port: 9999,
+  port: 10000,
   username: "",
   password: "",
 };
