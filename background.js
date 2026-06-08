@@ -928,8 +928,8 @@ async function solveRecaptcha(tabId, totalWaitMs = 90000) {
     if (!audioUrl) await new Promise((r) => setTimeout(r, 500));
   }
   if (!audioUrl) {
-    console.warn('[recaptcha] no audio URL appeared — possible "automated queries" block');
-    return false;
+    console.warn('[recaptcha] no audio URL appeared (no audio play button) — falling back to 2captcha');
+    return await solveWith2captcha(tabId);
   }
   console.log('[recaptcha] audio URL:', audioUrl.slice(0, 80) + '…');
   // 4. Transcribe via wit.ai.
@@ -975,6 +975,116 @@ async function solveRecaptcha(tabId, totalWaitMs = 90000) {
 // Backwards-compatible alias — the old caller uses triggerBusterSolve().
 async function triggerBusterSolve(tabId, totalWaitMs = 90000) {
   return solveRecaptcha(tabId, totalWaitMs);
+}
+
+// 2captcha FALLBACK — used ONLY when the audio challenge is unavailable
+// (no audio play button), e.g. Google's "automated queries" block. 2captcha
+// solves reCAPTCHA v2 server-side from the sitekey and returns a token, which
+// we inject into the page (no audio involved). API key: self.TWOCAPTCHA.apiKey.
+async function solveWith2captcha(tabId) {
+  const apiKey = self.TWOCAPTCHA && self.TWOCAPTCHA.apiKey;
+  if (!apiKey) { console.warn('[2captcha] no API key configured — cannot fall back'); return false; }
+
+  // 1. Read the reCAPTCHA sitekey + page URL from the tab (top frame DOM).
+  const info = await execInTab(tabId, () => {
+    let sitekey = null;
+    const el = document.querySelector('[data-sitekey]');
+    if (el) sitekey = el.getAttribute('data-sitekey');
+    if (!sitekey) {
+      const ifr = document.querySelector('iframe[src*="recaptcha"][src*="k="]');
+      if (ifr) { try { sitekey = new URL(ifr.src).searchParams.get('k'); } catch (e) {} }
+    }
+    return { sitekey, url: location.href };
+  });
+  if (!info || !info.sitekey) { console.warn('[2captcha] reCAPTCHA sitekey not found'); return false; }
+  console.log(`[2captcha] sitekey=${info.sitekey} url=${info.url}`);
+
+  // 2. Submit the captcha to 2captcha.
+  let reqId = null;
+  try {
+    const inUrl = `https://2captcha.com/in.php?key=${encodeURIComponent(apiKey)}`
+      + `&method=userrecaptcha&googlekey=${encodeURIComponent(info.sitekey)}`
+      + `&pageurl=${encodeURIComponent(info.url)}&json=1`;
+    const j = await fetch(inUrl, { credentials: 'omit' }).then((r) => r.json());
+    if (j.status !== 1) { console.error('[2captcha] in.php error:', j.request); return false; }
+    reqId = j.request;
+  } catch (e) { console.error('[2captcha] in.php failed:', e && e.message); return false; }
+  console.log(`[2captcha] submitted id=${reqId} — polling for token...`);
+
+  // 3. Poll res.php for the token (15s initial wait, then every 5s up to ~120s).
+  let token = null;
+  const start = Date.now();
+  await new Promise((r) => setTimeout(r, 15000));
+  while (Date.now() - start < 120000) {
+    try {
+      const resUrl = `https://2captcha.com/res.php?key=${encodeURIComponent(apiKey)}`
+        + `&action=get&id=${encodeURIComponent(reqId)}&json=1`;
+      const j = await fetch(resUrl, { credentials: 'omit' }).then((r) => r.json());
+      if (j.status === 1) { token = j.request; break; }
+      if (j.request && j.request !== 'CAPCHA_NOT_READY') {
+        console.error('[2captcha] res.php error:', j.request);
+        return false;
+      }
+    } catch (e) { /* transient — keep polling */ }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  if (!token) { console.warn('[2captcha] timed out waiting for token'); return false; }
+  console.log(`[2captcha] got token (${token.length} chars) — injecting`);
+
+  // 4. Inject the token in the MAIN world (so we can also invoke grecaptcha
+  //    callbacks), then submit the form (the /sorry/ page needs a submit).
+  try {
+    await RT.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (tok) => {
+        document.querySelectorAll('textarea#g-recaptcha-response, textarea[name="g-recaptcha-response"]').forEach((t) => {
+          t.value = tok;
+          t.style.display = 'block';
+          t.dispatchEvent(new Event('input', { bubbles: true }));
+          t.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        // Invoke any registered grecaptcha callbacks with the token.
+        try {
+          const cfg = window.___grecaptcha_cfg;
+          if (cfg && cfg.clients) {
+            for (const cid in cfg.clients) {
+              const client = cfg.clients[cid];
+              for (const k in client) {
+                const o = client[k];
+                if (o && typeof o === 'object') {
+                  for (const k2 in o) {
+                    const entry = o[k2];
+                    if (entry && typeof entry.callback === 'function') {
+                      try { entry.callback(tok); } catch (e) {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {}
+        // The /sorry/ page (and most challenge forms) submit to proceed.
+        const form = document.querySelector('form#captcha-form, form[action*="sorry"], form');
+        if (form) { try { form.submit(); } catch (e) {} }
+      },
+      args: [token],
+    });
+  } catch (e) {
+    console.error('[2captcha] token injection failed:', e && e.message);
+    return false;
+  }
+
+  // 5. Confirm we left the captcha/sorry page.
+  const t2 = Date.now();
+  while (Date.now() - t2 < 30000) {
+    let url = '';
+    try { const t = await RT.tabs.get(tabId); url = (t && t.url) || ''; } catch (e) {}
+    if (url && !url.includes('/sorry/')) { console.log(`[2captcha] solved — now on ${url}`); return true; }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  console.warn('[2captcha] token injected but still on captcha page');
+  return false;
 }
 
 // --- Turnstile click bridge handler -----------------------------------------

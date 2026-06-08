@@ -24,6 +24,9 @@ env:
   PROXY_PORT: "80"
   PROXY_USER: "tjijutki-rotate"
   PROXY_PASS: "4vg93ifc50gnx"
+  # 2captcha API key — fallback captcha solver used ONLY when the reCAPTCHA
+  # audio challenge has no play button (audio blocked). Plaintext by request.
+  TWOCAPTCHA_API_KEY: "cc659aa1b0cff87b80e3969a281f8d3f"
 
 jobs:
   run:
@@ -126,14 +129,18 @@ jobs:
           defaultPref("network.proxy.allow_hijacking_localhost", true);
           EOF
 
-          # Inject the proxy credentials into the addon so its onAuthRequired
-          # handler can answer the proxy's 407 challenge (no login popup).
+          # Inject the proxy credentials + 2captcha key into the addon so its
+          # onAuthRequired handler can answer the proxy 407 and its captcha
+          # fallback can call 2captcha when the audio challenge is unavailable.
           cat > "$GITHUB_WORKSPACE/proxy-config.js" << EOF
           self.PROXY_AUTH = {
             host: "${PROXY_HOST}",
             port: ${PROXY_PORT},
             username: "${PROXY_USER}",
             password: "${PROXY_PASS}",
+          };
+          self.TWOCAPTCHA = {
+            apiKey: "${TWOCAPTCHA_API_KEY}",
           };
           EOF
 

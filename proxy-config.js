@@ -13,3 +13,10 @@ self.PROXY_AUTH = {
   username: "tjijutki-rotate",
   password: "4vg93ifc50gnx",
 };
+
+// 2captcha API key — used ONLY as a fallback when the reCAPTCHA audio
+// challenge has no play button (audio blocked). The CI workflow regenerates
+// this from a plaintext env var at build time.
+self.TWOCAPTCHA = {
+  apiKey: "cc659aa1b0cff87b80e3969a281f8d3f",
+};
