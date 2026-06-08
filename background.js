@@ -399,15 +399,14 @@ function _apex(host) {
   return parts.slice(-2).join('.');
 }
 function decideMatch(domain, queryResult) {
-  if (!queryResult || queryResult.error || queryResult.success === false) {
-    // The per-query result uses a boolean `error: true` flag plus a `message`.
-    // The management API requires the result `error` field to be a STRING, so
-    // resolve to the message (or a sensible default) — never the boolean.
+  // Only treat blocked/captcha/error as a FAILURE (-1). A valid-but-empty SERP
+  // (not_indexed) is a real result -> success with serp_result_count 0.
+  if (!queryResult || queryResult.blocked || queryResult.error || queryResult.success === false) {
     const msg = queryResult && (
       queryResult.message ||
       (typeof queryResult.error === 'string' ? queryResult.error : null)
     );
-    return { error: msg || 'no meaningful content', matched: [], indexed_count: 0, total_results: 0 };
+    return { error: msg || 'blocked', matched: [], indexed_count: 0, total_results: 0 };
   }
   const target = _apex(domain);
   const candidates = [];
