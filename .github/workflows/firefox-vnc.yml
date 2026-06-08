@@ -399,16 +399,11 @@ jobs:
           echo "            FIREFOX ADDON VNC IS RUNNING!"
           echo "================================================================"
           echo ""
-          echo "VNC Access URL: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html"
-          echo "Password: ${VNC_PASSWORD}"
+          echo "One-click VNC (auto-connects, password pre-filled):"
+          echo "${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSWORD}"
           echo ""
           echo "Firefox ESR running with addon: ${ADDON_ID}"
           echo "server.py running in mode: ${SERP_MODE}  (WebSocket :8765)"
-          echo ""
-          echo "What to confirm in VNC:"
-          echo "  1. Firefox is open with the SERP Puller addon installed"
-          echo "  2. The toolbar icon is GREEN (popup says 'Connected to server.py')"
-          echo "  3. In --mode local it processes domains.txt -> results.json"
           echo ""
 
       - name: Keep Session Alive
@@ -418,7 +413,7 @@ jobs:
           echo "Keeping VNC session alive..."
 
           while true; do
-            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html | Password: ${VNC_PASSWORD}"
+            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSWORD}"
 
             # Restart VNC if it died (xstartup relaunches Firefox automatically)
             if ! pgrep -f "Xvnc.*:1" > /dev/null; then
