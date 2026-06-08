@@ -38,27 +38,30 @@ const MAX_BATCH_RETRIES = 7;               // per-batch attempts: if all queries
 const RT = (typeof browser !== 'undefined' && browser.runtime) ? browser : chrome;
 
 // --- Proxy authentication ----------------------------------------------------
-// Firefox's proxy is set directly to the rotating proxy (p.webshare.io:80) via
-// the profile prefs, but Firefox can't carry proxy credentials in prefs — it
-// would pop up a login dialog and freeze the automated session. So we supply
-// the username/password automatically whenever the proxy challenges (407).
-// Credentials come from proxy-config.js (self.PROXY_AUTH).
+// We ALWAYS register an onAuthRequired handler so Firefox NEVER shows its
+// native proxy login dialog (which would freeze an automated/VNC session).
+//  - IP-auth mode (no creds): the runner/host IP is authorized on webshare, so
+//    no auth is needed. If a 407 still slips through we CANCEL the request
+//    (no dialog); the batch retries on a fresh sticky IP.
+//  - username/password mode: we supply the credentials from proxy-config.js.
 try {
-  if (self.PROXY_AUTH && self.PROXY_AUTH.username && RT.webRequest && RT.webRequest.onAuthRequired) {
+  if (RT.webRequest && RT.webRequest.onAuthRequired) {
     RT.webRequest.onAuthRequired.addListener(
       (details) => {
         if (details && details.isProxy) {
-          console.log('[proxy] supplying credentials for proxy auth challenge');
-          return { authCredentials: { username: self.PROXY_AUTH.username, password: self.PROXY_AUTH.password } };
+          if (self.PROXY_AUTH && self.PROXY_AUTH.username) {
+            return { authCredentials: { username: self.PROXY_AUTH.username, password: self.PROXY_AUTH.password } };
+          }
+          // IP-auth: no credentials. Cancel rather than show the login dialog.
+          console.warn('[proxy] proxy 407 with no creds (IP-auth expected) — cancelling request to avoid login dialog');
+          return { cancel: true };
         }
         return {}; // not a proxy challenge — leave site auth alone
       },
       { urls: ['<all_urls>'] },
       ['blocking']
     );
-    console.log(`[proxy] onAuthRequired handler registered for ${self.PROXY_AUTH.host}:${self.PROXY_AUTH.port}`);
-  } else {
-    console.log('[proxy] no proxy credentials configured (no-auth proxy or direct) — onAuthRequired not registered');
+    console.log('[proxy] onAuthRequired handler registered (suppresses proxy login dialog)');
   }
 } catch (e) {
   console.warn('[proxy] could not register onAuthRequired handler:', e && e.message);
