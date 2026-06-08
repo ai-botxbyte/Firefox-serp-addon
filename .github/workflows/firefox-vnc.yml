@@ -2,14 +2,6 @@ name: Firefox Addon VNC
 
 on:
   workflow_dispatch:
-    inputs:
-      proxy_backend:
-        description: "Proxy backend for Firefox"
-        type: choice
-        options:
-          - tailscale
-          - webshare
-        default: tailscale
 
 env:
   DISPLAY: ":1"
@@ -24,23 +16,14 @@ env:
   # server.py log: streamed live into the Actions console, symlinked onto the
   # VNC Desktop as serp-logs.txt, and uploaded as an artifact at the end.
   LOG_FILE: "/home/runner/serp-logs.txt"
-  # Proxy: Firefox is pointed DIRECTLY at the selected proxy. The backend is
-  # chosen at runtime by the 'Select proxy backend' step:
-  #   tailscale (default) -> http://100.94.121.52:3128  (no auth, over tailnet)
-  #   webshare (optional) -> http://p.webshare.io:80     (auth via addon)
-  # PROXY_HOST/PORT/USER/PASS are written to $GITHUB_ENV by that step.
+  # Rotating proxy — Firefox is pointed DIRECTLY at this proxy. Credentials are
+  # supplied automatically by the addon (webRequest.onAuthRequired), since
+  # Firefox prefs can't carry proxy auth. Plaintext by request.
   # (server.py -> articleinnovator.com stays DIRECT.)
-  #
-  # SECURITY NOTE: this Tailscale auth key grants tailnet access. It is in
-  # plaintext by request — strongly consider a GitHub Secret + an ephemeral,
-  # tagged, pre-approved key, and rotate it.
-  TS_AUTHKEY: "tskey-auth-ku8Kyd7oB421CNTRL-Bv2u1XJhYLBeEByjSLf9MByhpiZUvTNBG"
-  TS_PROXY_HOST: "100.94.121.52"
-  TS_PROXY_PORT: "3128"
-  WS_PROXY_HOST: "p.webshare.io"
-  WS_PROXY_PORT: "80"
-  WS_PROXY_USER: "tjijutki-rotate"
-  WS_PROXY_PASS: "4vg93ifc50gnx"
+  PROXY_HOST: "p.webshare.io"
+  PROXY_PORT: "80"
+  PROXY_USER: "tjijutki-rotate"
+  PROXY_PASS: "4vg93ifc50gnx"
 
 jobs:
   run:
@@ -55,35 +38,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Select proxy backend
-        run: |
-          BACKEND="${{ github.event.inputs.proxy_backend || 'tailscale' }}"
-          echo "PROXY_BACKEND=$BACKEND" >> "$GITHUB_ENV"
-          if [ "$BACKEND" = "webshare" ]; then
-            echo "PROXY_HOST=${WS_PROXY_HOST}" >> "$GITHUB_ENV"
-            echo "PROXY_PORT=${WS_PROXY_PORT}" >> "$GITHUB_ENV"
-            echo "PROXY_USER=${WS_PROXY_USER}" >> "$GITHUB_ENV"
-            echo "PROXY_PASS=${WS_PROXY_PASS}" >> "$GITHUB_ENV"
-          else
-            # tailscale (default): no-auth proxy reachable over the tailnet
-            echo "PROXY_HOST=${TS_PROXY_HOST}" >> "$GITHUB_ENV"
-            echo "PROXY_PORT=${TS_PROXY_PORT}" >> "$GITHUB_ENV"
-            echo "PROXY_USER=" >> "$GITHUB_ENV"
-            echo "PROXY_PASS=" >> "$GITHUB_ENV"
-          fi
-          echo "Selected proxy backend: $BACKEND"
-
-      - name: Connect Tailscale
-        if: ${{ (github.event.inputs.proxy_backend || 'tailscale') == 'tailscale' }}
-        run: |
-          echo "Installing Tailscale and joining tailnet..."
-          curl -fsSL https://tailscale.com/install.sh | sh
-          sudo tailscale up --auth-key="${TS_AUTHKEY}" --hostname="gh-firefox-$GITHUB_RUN_ID" --accept-routes
-          tailscale status || true
-          echo "Tailscale IP: $(tailscale ip -4 2>/dev/null | head -1 || echo '?')"
-          # Confirm the tailnet proxy is reachable
-          echo "Proxy reachability: $(curl -s --max-time 20 -o /dev/null -w '%{http_code}' -x "http://${TS_PROXY_HOST}:${TS_PROXY_PORT}" https://ifconfig.me || echo 'unreachable')"
 
       - name: Optimize APT mirror
         timeout-minutes: 3
@@ -250,22 +204,18 @@ jobs:
 
       - name: Verify proxy
         run: |
-          # Firefox is pointed directly at the selected proxy; confirm it works.
-          # Non-fatal so the session still comes up if the proxy has a hiccup.
-          echo "Backend: ${PROXY_BACKEND}  ->  ${PROXY_HOST}:${PROXY_PORT}"
-          if [ -n "$PROXY_USER" ]; then
-            PURL="http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}"
-          else
-            PURL="http://${PROXY_HOST}:${PROXY_PORT}"
-          fi
+          # Firefox is pointed directly at the rotating proxy; confirm the
+          # credentials authenticate and the IP rotates. Non-fatal.
+          echo "Proxy: ${PROXY_HOST}:${PROXY_PORT}"
+          PURL="http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}"
           echo "Direct IP:  $(curl -s --max-time 15 https://api.ipify.org || echo '?')"
           P1=$(curl -s --max-time 25 -x "$PURL" https://api.ipify.org || true)
           P2=$(curl -s --max-time 25 -x "$PURL" https://api.ipify.org || true)
           if [ -n "$P1" ]; then
             echo "✅ Proxy OK — IPs: $P1 / $P2 (Firefox will use ${PROXY_HOST}:${PROXY_PORT})"
           else
-            echo "⚠️ Proxy returned no IP (auth/connectivity issue)."
-            echo "   Firefox is still configured for ${PROXY_HOST}:${PROXY_PORT}; check the backend."
+            echo "⚠️ Proxy returned no IP (auth/connectivity issue). Firefox is still"
+            echo "   configured for it; check webshare username/password auth."
           fi
 
       - name: Configure VNC Server
@@ -454,20 +404,11 @@ jobs:
 
       - name: Cleanup VNC
         if: always()
-        timeout-minutes: 2
+        timeout-minutes: 1
         run: |
           export PATH=$PATH:/opt/TurboVNC/bin
           pkill -f "server.py" || true
           pkill -f "firefox" || true
           pkill -x cloudflared || true
           vncserver -kill :1 || true
-          # Remove this runner from the tailnet. 'logout' deauthenticates the
-          # node; with an EPHEMERAL auth key the coordination server then
-          # auto-deletes the device. Runs on success, failure, AND cancel.
-          if command -v tailscale >/dev/null 2>&1; then
-            echo "Tearing down Tailscale node..."
-            sudo tailscale down || true
-            sudo tailscale logout || true
-            echo "Tailscale node removed (ephemeral key -> auto-deleted)."
-          fi
           echo "Cleanup complete"
