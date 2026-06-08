@@ -44,7 +44,7 @@ const RT = (typeof browser !== 'undefined' && browser.runtime) ? browser : chrom
 // the username/password automatically whenever the proxy challenges (407).
 // Credentials come from proxy-config.js (self.PROXY_AUTH).
 try {
-  if (self.PROXY_AUTH && RT.webRequest && RT.webRequest.onAuthRequired) {
+  if (self.PROXY_AUTH && self.PROXY_AUTH.username && RT.webRequest && RT.webRequest.onAuthRequired) {
     RT.webRequest.onAuthRequired.addListener(
       (details) => {
         if (details && details.isProxy) {
@@ -57,6 +57,8 @@ try {
       ['blocking']
     );
     console.log(`[proxy] onAuthRequired handler registered for ${self.PROXY_AUTH.host}:${self.PROXY_AUTH.port}`);
+  } else {
+    console.log('[proxy] no proxy credentials configured (no-auth proxy or direct) — onAuthRequired not registered');
   }
 } catch (e) {
   console.warn('[proxy] could not register onAuthRequired handler:', e && e.message);
