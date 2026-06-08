@@ -474,8 +474,34 @@ async function prepareWarmTab(engine) {
   // SOLVE CAPTCHA if present. After this, cookies are trusted.
   console.log(`[warmup] checking page for captcha...`);
   await ensureCaptchaSolved(tabId);
+  // If Google still parks us on /sorry/, the current exit IP is flagged.
+  // Rotate to a FRESH sticky IP and RE-OPEN the hello query URL until we land
+  // on a real SERP (not /sorry/).
+  await settleOffSorry(tabId, warmupUrl);
   await new Promise((r) => setTimeout(r, 1500));
   return tabId;
+}
+
+// If the tab is sitting on a /sorry/ captcha wall, rotate to a fresh sticky
+// exit IP and re-open the clean hello query URL. Repeat a few times. Returns
+// true once we're off /sorry/.
+async function settleOffSorry(tabId, cleanUrl) {
+  for (let i = 0; i < 4; i++) {
+    let url = '';
+    try { const t = await RT.tabs.get(tabId); url = (t && t.url) || ''; } catch (e) {}
+    if (url && !url.includes('/sorry/')) return true; // off the captcha page
+    rotateProxyPort(); // current IP is flagged — get a fresh sticky IP
+    console.log(`[warmup] still on /sorry/ — rotating IP and re-opening ${cleanUrl} (try ${i + 1}/4)`);
+    try {
+      await RT.tabs.update(tabId, { url: cleanUrl, active: true });
+      await waitForTabComplete(tabId, SERP_TAB_TIMEOUT_MS);
+    } catch (e) { /* keep trying */ }
+    await ensureCaptchaSolved(tabId);
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  let u = '';
+  try { const t = await RT.tabs.get(tabId); u = (t && t.url) || ''; } catch (e) {}
+  return !!u && !u.includes('/sorry/');
 }
 
 // Handle a 'warmup' request from server.py: warm a tab BEFORE the batch is
@@ -612,6 +638,7 @@ async function rewarmTab(tabId, engine) {
     console.warn('[batch] rewarm navigation failed:', e && e.message);
   }
   await ensureCaptchaSolved(tabId);
+  await settleOffSorry(tabId, warmupUrl);
   await new Promise((r) => setTimeout(r, 1500));
 }
 
