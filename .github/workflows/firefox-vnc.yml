@@ -7,7 +7,7 @@ env:
   DISPLAY: ":1"
   VNC_PORT: 5901
   NOVNC_PORT: 6080
-  VNC_PASSWORD: "botxbyte123"
+  VNC_PASSCODE: "botxbyte123"
   PORTABLE_DIR: "/home/runner/firefox-portable"
   ADDON_ID: "serp-puller@botxbyte.com"
   # server.py mode: 'local' (file-based: domains.txt -> results.json) or 'prod'
@@ -288,7 +288,7 @@ jobs:
         run: |
           export PATH=$PATH:/opt/TurboVNC/bin
           mkdir -p ~/.vnc
-          echo "${VNC_PASSWORD}" | vncpasswd -f > ~/.vnc/passwd
+          echo "${VNC_PASSCODE}" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
 
           # xstartup launches XFCE and then our portable Firefox with the profile
@@ -301,7 +301,7 @@ jobs:
           "$PORTABLE_DIR/firefox/firefox" --profile "$PORTABLE_DIR/profile" --no-remote &
           EOF
           chmod +x ~/.vnc/xstartup.turbovnc
-          echo "VNC configured (password: ${VNC_PASSWORD})"
+          echo "VNC configured (password: ${VNC_PASSCODE})"
 
       - name: Start VNC Server
         run: |
@@ -400,7 +400,7 @@ jobs:
           echo "================================================================"
           echo ""
           echo "One-click VNC (auto-connects, password pre-filled, local scaling):"
-          echo "${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSWORD}"
+          echo "${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSCODE}"
           echo ""
           echo "Firefox ESR running with addon: ${ADDON_ID}"
           echo "server.py running in mode: ${SERP_MODE}  (WebSocket :8765)"
@@ -413,7 +413,7 @@ jobs:
           echo "Keeping VNC session alive..."
 
           while true; do
-            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSWORD}"
+            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSCODE}"
 
             # Restart VNC if it died (xstartup relaunches Firefox automatically)
             if ! pgrep -f "Xvnc.*:1" > /dev/null; then
