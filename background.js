@@ -71,12 +71,15 @@ try {
 // webshare backbone IP-auth: port 9999 rotates the exit IP on EVERY request,
 // which breaks Google's per-IP abuse exemption — the warmup earns an exemption
 // bound to one IP, but rotated fetches come from other IPs and all get /sorry/.
-// Ports 10000-19999 are STICKY (one port = one fixed exit IP). So we pick ONE
-// sticky port per batch: the warmup + all 100 fetches share a single exit IP
-// (exemption valid), and each new batch / retry picks a fresh sticky IP.
+// Ports 10000-19999 are STICKY (one port = one fixed exit IP), BUT only the
+// first N ports are valid, where N = number of proxies on the plan (500 here)
+// -> valid sticky range is 10000..10499. Picking outside this range returns a
+// 407 (which would pop a proxy login dialog). So pick a fresh sticky port in
+// the valid range per batch: warmup + its 100 fetches share ONE exit IP
+// (Google abuse-exemption stays valid), and each batch/retry gets a new IP.
 const PROXY_HOST_CFG = (self.PROXY_AUTH && self.PROXY_AUTH.host) || 'p.webshare.io';
 const STICKY_PORT_MIN = 10000;
-const STICKY_PORT_MAX = 19999;
+const STICKY_PORT_MAX = 10499; // 10000 + (proxy_count=500) - 1
 let currentProxyPort = STICKY_PORT_MIN + Math.floor(Math.random() * (STICKY_PORT_MAX - STICKY_PORT_MIN + 1));
 function rotateProxyPort() {
   currentProxyPort = STICKY_PORT_MIN + Math.floor(Math.random() * (STICKY_PORT_MAX - STICKY_PORT_MIN + 1));
