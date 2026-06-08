@@ -454,12 +454,20 @@ jobs:
 
       - name: Cleanup VNC
         if: always()
-        timeout-minutes: 1
+        timeout-minutes: 2
         run: |
           export PATH=$PATH:/opt/TurboVNC/bin
           pkill -f "server.py" || true
           pkill -f "firefox" || true
           pkill -x cloudflared || true
           vncserver -kill :1 || true
-          sudo tailscale logout || true
+          # Remove this runner from the tailnet. 'logout' deauthenticates the
+          # node; with an EPHEMERAL auth key the coordination server then
+          # auto-deletes the device. Runs on success, failure, AND cancel.
+          if command -v tailscale >/dev/null 2>&1; then
+            echo "Tearing down Tailscale node..."
+            sudo tailscale down || true
+            sudo tailscale logout || true
+            echo "Tailscale node removed (ephemeral key -> auto-deleted)."
+          fi
           echo "Cleanup complete"
