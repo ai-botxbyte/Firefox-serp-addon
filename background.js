@@ -86,6 +86,19 @@ function rotateProxyPort() {
   console.log(`[proxy] sticky exit port for this batch: ${currentProxyPort}`);
   return currentProxyPort;
 }
+
+// On a HARD BLOCK (Google "automated queries", unsolvable), learn the current
+// exit IP (a fetch goes out through the current sticky port) and ask server.py
+// to REPLACE that proxy IP via the webshare API. Then rotate to a fresh port.
+async function requestProxyReplacement(reason) {
+  let ip = null;
+  try {
+    ip = (await fetch('https://api.ipify.org', { credentials: 'omit' }).then((r) => r.text())).trim();
+  } catch (e) { /* still report with null ip */ }
+  console.warn(`[proxy] HARD BLOCK (${reason}) on exit IP ${ip} — asking server.py to replace it`);
+  try { await sendReply({ action: 'replaceProxy', ip, reason }); } catch (e) {}
+  rotateProxyPort(); // move off the burned IP for the next attempt
+}
 try {
   if (RT.proxy && RT.proxy.onRequest) {
     RT.proxy.onRequest.addListener(
@@ -1003,6 +1016,19 @@ async function solveRecaptcha(tabId, totalWaitMs = 90000) {
     if (!audioUrl) await new Promise((r) => setTimeout(r, 500));
   }
   if (!audioUrl) {
+    // Distinguish a solvable reCAPTCHA from Google's HARD BLOCK page
+    // ("Your computer or network may be sending automated queries"), which
+    // has NO challenge to solve — 2captcha can't help. In that case the exit
+    // IP is burned: ask server.py to REPLACE this proxy IP (webshare API).
+    const hardBlock = await execInTab(tabId, () => {
+      const t = (document.body && document.body.innerText) || '';
+      return /automated queries|can't process your request|unusual traffic from/i.test(t);
+    });
+    if (hardBlock) {
+      console.warn('[recaptcha] HARD BLOCK ("automated queries") — not solvable; requesting proxy replacement');
+      await requestProxyReplacement('automated queries hard block');
+      return false;
+    }
     console.warn('[recaptcha] no audio URL appeared (no audio play button) — falling back to 2captcha');
     return await solveWith2captcha(tabId);
   }

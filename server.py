@@ -103,6 +103,11 @@ _default_base = PROD_MGMT_BASE_URL if MODE == "prod" else LOCAL_MGMT_BASE_URL
 MGMT_BASE_URL = os.getenv("MGMT_BASE_URL", _default_base).rstrip("/")
 MGMT_AUTH_TOKEN = os.getenv("MGMT_AUTH_TOKEN", "")
 MGMT_WORKSPACE_ID = os.getenv("MGMT_WORKSPACE_ID", "")
+# Webshare proxy API — used to REPLACE a proxy IP that Google hard-blocks
+# ("Your computer or network may be sending automated queries"), which 2captcha
+# cannot solve (it's not a challenge). Plaintext by request.
+WEBSHARE_API_KEY = os.getenv("WEBSHARE_API_KEY", "9ulqjlekme1514dwfi7p6lwm9kmvygshn5brii5s")
+WEBSHARE_REPLACE_URL = "https://proxy.webshare.io/api/v3/proxy/replace/"
 SERP_PULL_PATH = os.getenv("SERP_PULL_PATH", "/api/v1/serp-queue/pull/")
 SERP_RESULT_PATH = os.getenv("SERP_RESULT_PATH", "/api/v1/serp-queue/result/")
 POLL_INTERVAL_SECS = float(os.getenv("POLL_INTERVAL_SECS", "5"))
@@ -145,6 +150,53 @@ def _auth_headers() -> Dict[str, str]:
     return h
 
 
+async def replace_proxy(ip: str) -> None:
+    """Replace a hard-blocked proxy IP via the webshare API (async create +
+    poll until completed). Used when Google shows 'automated queries' on an
+    exit IP, which 2captcha cannot solve."""
+    if not ip:
+        print("⚠️ replace_proxy: no IP provided")
+        return
+    headers = {"Authorization": f"Token {WEBSHARE_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "to_replace": {"type": "ip_address", "ip_addresses": [ip]},
+        "replace_with": [{"type": "any", "count": 1}],
+        "dry_run": False,
+    }
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(WEBSHARE_REPLACE_URL, json=payload, headers=headers,
+                              timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                data = await resp.json()
+                if resp.status >= 400:
+                    print(f"❌ proxy replace for {ip} failed: HTTP {resp.status} "
+                          f"{data.get('error_code') or data}")
+                    return
+                rid = data.get("id")
+                state = data.get("state")
+                print(f"♻️  proxy replacement requested for {ip} (id={rid}, state={state})")
+                # Poll the retrieve endpoint until completed/failed (~60s max).
+                get_url = f"{WEBSHARE_REPLACE_URL}{rid}/"
+                for _ in range(20):
+                    if state in ("completed", "failed"):
+                        break
+                    await asyncio.sleep(3)
+                    async with s.get(get_url, headers=headers,
+                                    timeout=aiohttp.ClientTimeout(total=20)) as gr:
+                        gd = await gr.json()
+                        state = gd.get("state")
+                        if state == "completed":
+                            print(f"✅ proxy {ip} REPLACED "
+                                  f"(removed={gd.get('proxies_removed')}, added={gd.get('proxies_added')})")
+                            return
+                        if state == "failed":
+                            print(f"❌ proxy replacement for {ip} failed: {gd.get('error_code')} {gd.get('reason')}")
+                            return
+                print(f"⚠️ proxy replacement for {ip} still {state} after polling")
+    except Exception as e:
+        print(f"❌ replace_proxy error for {ip}: {e}")
+
+
 async def ws_handler(ws):
     """Single addon connection at a time. When the MV3 background script is
     suspended/resumed by Firefox, it opens a NEW socket — the old one is
@@ -174,6 +226,13 @@ async def ws_handler(ws):
                 pending[req_id].set_result(msg)
             elif action == "hello":
                 print(f"👋 hello from addon: {msg}")
+            elif action == "replaceProxy":
+                # Addon hit Google's "automated queries" hard block on this exit
+                # IP (unsolvable by 2captcha). Replace that proxy via webshare.
+                ip = msg.get("ip")
+                print(f"🚫 addon reported HARD BLOCK on proxy IP {ip} "
+                      f"(Google 'automated queries') — requesting webshare replacement")
+                asyncio.create_task(replace_proxy(ip))
             elif action in ("heartbeat", "heartbeat-ack"):
                 # Silent — keeps the MV3 background alive between batches.
                 pass
