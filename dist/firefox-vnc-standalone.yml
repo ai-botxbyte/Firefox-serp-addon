@@ -1,0 +1,354 @@
+name: Firefox Addon VNC (standalone)
+
+# Drop this file into ANY repo's .github/workflows/ . It clones the public
+# ai-botxbyte/Firefox-serp-addon repo and runs the whole stack (portable
+# Firefox + addon + server.py + VNC + Cloudflare tunnel). Nothing from the
+# host repo is used — everything is downloaded at runtime.
+
+on:
+  workflow_dispatch:
+
+env:
+  DISPLAY: ":1"
+  VNC_PORT: 5901
+  NOVNC_PORT: 6080
+  VNC_PASSCODE: "botxbyte123"
+  # Where the public addon repo is cloned (replaces actions/checkout).
+  ADDON_REPO: "https://github.com/ai-botxbyte/Firefox-serp-addon.git"
+  ADDON_DIR: "/home/runner/Firefox-serp-addon"
+  PORTABLE_DIR: "/home/runner/firefox-portable"
+  ADDON_ID: "serp-puller@botxbyte.com"
+  SERP_MODE: "prod"
+  LOG_FILE: "/home/runner/serp-logs.txt"
+  # Rotating proxy via IP AUTHORIZATION (no username/password). Sticky ports
+  # 10000-10499 (one port = one exit IP); the addon picks a fresh sticky port
+  # per batch. server.py -> articleinnovator.com stays DIRECT.
+  PROXY_HOST: "p.webshare.io"
+  PROXY_PORT: "10000"
+  PROXY_USER: ""
+  PROXY_PASS: ""
+  WEBSHARE_API_KEY: "9ulqjlekme1514dwfi7p6lwm9kmvygshn5brii5s"
+  TWOCAPTCHA_API_KEY: "cc659aa1b0cff87b80e3969a281f8d3f"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Clone Firefox-serp-addon
+        run: |
+          echo "Cloning addon repo..."
+          rm -rf "$ADDON_DIR"
+          git clone --depth 1 "$ADDON_REPO" "$ADDON_DIR"
+          echo "Cloned to $ADDON_DIR"
+          ls -la "$ADDON_DIR" | head
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Authorize runner IP on webshare
+        run: |
+          MYIP=$(curl -s --max-time 20 -H "Authorization: Token ${WEBSHARE_API_KEY}" \
+            https://proxy.webshare.io/api/v2/proxy/ipauthorization/whatsmyip/ | jq -r '.ip_address // empty')
+          [ -z "$MYIP" ] && MYIP=$(curl -s --max-time 20 https://api.ipify.org)
+          echo "Runner public IP: $MYIP"
+          RESP=$(curl -s --max-time 30 -X POST https://proxy.webshare.io/api/v2/proxy/ipauthorization/ \
+            -H "Authorization: Token ${WEBSHARE_API_KEY}" -H "Content-Type: application/json" \
+            -d "{\"ip_address\": \"$MYIP\"}")
+          IPAUTH_ID=$(echo "$RESP" | jq -r '.id // empty')
+          if [ -z "$IPAUTH_ID" ]; then
+            echo "Create response: $RESP"
+            IPAUTH_ID=$(curl -s -H "Authorization: Token ${WEBSHARE_API_KEY}" \
+              "https://proxy.webshare.io/api/v2/proxy/ipauthorization/" \
+              | jq -r --arg ip "$MYIP" '.results[]? | select(.ip_address==$ip) | .id' | head -1)
+          fi
+          echo "WS_IPAUTH_ID=$IPAUTH_ID" >> "$GITHUB_ENV"
+          echo "Authorized IP $MYIP -> ipauthorization id=$IPAUTH_ID"
+
+      - name: Optimize APT mirror
+        timeout-minutes: 3
+        run: |
+          sudo systemctl stop unattended-upgrades 2>/dev/null || true
+          sudo killall -9 unattended-upgrades 2>/dev/null || true
+          cat << 'EOF' | sudo tee /etc/apt/apt.conf.d/99ci-network >/dev/null
+          Acquire::Retries "6";
+          Acquire::http::Timeout "15";
+          Acquire::https::Timeout "15";
+          Acquire::ForceIPv4 "true";
+          EOF
+          sudo apt-get -o Acquire::Retries=6 update -q
+          echo "APT optimization complete"
+
+      - name: Install Desktop Environment (XFCE + VNC)
+        timeout-minutes: 18
+        run: |
+          sudo systemctl stop unattended-upgrades 2>/dev/null || true
+          sudo killall -9 unattended-upgrades 2>/dev/null || true
+          for i in $(seq 1 12); do
+            if ! sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then break; fi
+            echo "Waiting for dpkg lock... ($i/12)"; sleep 5
+          done
+          mkdir -p ~/cached-debs
+          (wget -q -O ~/cached-debs/turbovnc_2.2.5_amd64.deb \
+            https://phoenixnap.dl.sourceforge.net/project/turbovnc/2.2.5/turbovnc_2.2.5_amd64.deb && echo "TurboVNC downloaded") &
+          PID_VNC=$!
+          (cd ~ && git clone --depth 1 https://github.com/novnc/noVNC.git && \
+            cd noVNC && git clone --depth 1 https://github.com/novnc/websockify.git && echo "noVNC cloned") &
+          PID_NOVNC=$!
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+            xfce4 xfce4-terminal dbus-x11 x11-utils x11-xserver-utils xfonts-base net-tools \
+            libgtk-3-0 libdbus-glib-1-2 libasound2t64
+          echo "XFCE installed"
+          wait $PID_VNC && sudo dpkg -i ~/cached-debs/turbovnc_2.2.5_amd64.deb
+          wait $PID_NOVNC
+          echo "Desktop ready"
+
+      - name: Download & assemble portable Firefox + addon
+        timeout-minutes: 5
+        run: |
+          echo "Downloading Firefox ESR..."
+          curl -L -o /tmp/firefox-esr.tar.xz "https://download.mozilla.org/?product=firefox-esr-latest&os=linux64&lang=en-US"
+          mkdir -p "$PORTABLE_DIR"
+          tar -xJf /tmp/firefox-esr.tar.xz -C "$PORTABLE_DIR/"
+          FIREFOX_DIR="$PORTABLE_DIR/firefox"
+
+          mkdir -p "$FIREFOX_DIR/defaults/pref"
+          cat > "$FIREFOX_DIR/defaults/pref/autoconfig.js" << 'EOF'
+          pref("general.config.filename", "autoconfig.cfg");
+          pref("general.config.obscure_value", 0);
+          EOF
+
+          cat > "$FIREFOX_DIR/autoconfig.cfg" << EOF
+          // First line must be a comment
+          defaultPref("xpinstall.signatures.required", false);
+          defaultPref("extensions.langpacks.signatures.required", false);
+          defaultPref("network.proxy.type", 1);
+          defaultPref("network.proxy.http", "${PROXY_HOST}");
+          defaultPref("network.proxy.http_port", ${PROXY_PORT});
+          defaultPref("network.proxy.ssl", "${PROXY_HOST}");
+          defaultPref("network.proxy.ssl_port", ${PROXY_PORT});
+          defaultPref("network.proxy.socks_remote_dns", true);
+          defaultPref("network.proxy.no_proxies_on", "localhost, 127.0.0.1");
+          defaultPref("network.proxy.allow_hijacking_localhost", true);
+          defaultPref("network.captive-portal-service.enabled", false);
+          defaultPref("captivedetect.canonicalURL", "");
+          defaultPref("network.connectivity-service.enabled", false);
+          defaultPref("toolkit.telemetry.enabled", false);
+          defaultPref("toolkit.telemetry.unified", false);
+          defaultPref("datareporting.healthreport.uploadEnabled", false);
+          defaultPref("datareporting.policy.dataSubmissionEnabled", false);
+          defaultPref("app.normandy.enabled", false);
+          defaultPref("app.shield.optoutstudies.enabled", false);
+          defaultPref("browser.safebrowsing.malware.enabled", false);
+          defaultPref("browser.safebrowsing.phishing.enabled", false);
+          defaultPref("browser.safebrowsing.downloads.enabled", false);
+          defaultPref("browser.discovery.enabled", false);
+          defaultPref("browser.region.network.url", "");
+          defaultPref("browser.region.update.enabled", false);
+          defaultPref("services.settings.server", "");
+          defaultPref("browser.newtabpage.activity-stream.feeds.telemetry", false);
+          defaultPref("browser.newtabpage.activity-stream.telemetry", false);
+          defaultPref("browser.startup.homepage", "about:blank");
+          defaultPref("browser.startup.page", 0);
+          defaultPref("extensions.getAddons.cache.enabled", false);
+          defaultPref("network.prefetch-next", false);
+          defaultPref("network.auth.confirmAuth.enabled", false);
+          EOF
+
+          # Inject proxy creds + 2captcha key into the cloned addon
+          cat > "$ADDON_DIR/proxy-config.js" << EOF
+          self.PROXY_AUTH = {
+            host: "${PROXY_HOST}",
+            port: ${PROXY_PORT},
+            username: "${PROXY_USER}",
+            password: "${PROXY_PASS}",
+          };
+          self.TWOCAPTCHA = {
+            apiKey: "${TWOCAPTCHA_API_KEY}",
+          };
+          EOF
+
+          mkdir -p "$PORTABLE_DIR/extensions"
+          cd "$ADDON_DIR"
+          zip -r "$PORTABLE_DIR/extensions/${ADDON_ID}.xpi" . \
+            -x '.git/*' '.github/*' '*.DS_Store'
+
+          mkdir -p "$FIREFOX_DIR/distribution"
+          cat > "$FIREFOX_DIR/distribution/policies.json" << EOF
+          {
+            "policies": {
+              "Extensions": {
+                "Install": ["$PORTABLE_DIR/extensions/${ADDON_ID}.xpi"]
+              },
+              "DisableAppUpdate": true,
+              "DontCheckDefaultBrowser": true
+            }
+          }
+          EOF
+
+          mkdir -p "$PORTABLE_DIR/profile"
+          unzip -l "$PORTABLE_DIR/extensions/${ADDON_ID}.xpi" | grep manifest.json
+
+      - name: Start SERP server.py
+        run: |
+          echo "Starting server.py (mode=${SERP_MODE})..."
+          cd "$ADDON_DIR"
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --no-cache-dir -r requirements.txt
+          : > "$LOG_FILE"
+          mkdir -p /home/runner/Desktop
+          ln -sf "$LOG_FILE" /home/runner/Desktop/serp-logs.txt
+          nohup python3 -u server.py --mode "${SERP_MODE}" > "$LOG_FILE" 2>&1 &
+          SERVER_PID=$!
+          echo "server.py PID: $SERVER_PID"
+          UP=0
+          for i in $(seq 1 20); do
+            if ss -ltn 2>/dev/null | grep -q ':8765 '; then echo "WS listening :8765 (${i}s)"; UP=1; break; fi
+            sleep 1
+          done
+          if ! kill -0 $SERVER_PID 2>/dev/null; then echo "server.py exited:"; cat $LOG_FILE; exit 1; fi
+          [ "$UP" != "1" ] && { echo ":8765 not up yet; log:"; tail -20 $LOG_FILE || true; } || true
+
+      - name: Verify proxy
+        run: |
+          echo "Proxy: ${PROXY_HOST}:${PROXY_PORT} (IP-auth)"
+          if [ -n "$PROXY_USER" ]; then PURL="http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}"; else PURL="http://${PROXY_HOST}:${PROXY_PORT}"; fi
+          echo "Direct IP:  $(curl -s --max-time 15 https://api.ipify.org || echo '?')"
+          P1=$(curl -s --max-time 25 -x "$PURL" https://api.ipify.org || true)
+          P2=$(curl -s --max-time 25 -x "$PURL" https://api.ipify.org || true)
+          if [ -n "$P1" ]; then echo "✅ Proxy OK — rotating IPs: $P1 / $P2"; else echo "⚠️ Proxy returned no IP (check IP authorization)"; fi
+
+      - name: Configure VNC Server
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          mkdir -p ~/.vnc
+          echo "${VNC_PASSCODE}" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+          cat > ~/.vnc/xstartup.turbovnc << EOF
+          #!/bin/bash
+          export NO_AT_BRIDGE=1
+          export SESSION_MANAGER=""
+          dbus-launch /usr/bin/startxfce4 &
+          sleep 5
+          "$PORTABLE_DIR/firefox/firefox" --profile "$PORTABLE_DIR/profile" --no-remote &
+          EOF
+          chmod +x ~/.vnc/xstartup.turbovnc
+          echo "VNC configured"
+
+      - name: Start VNC Server
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          vncserver :1 -geometry 1920x1080 -depth 24 -rfbport $VNC_PORT 2>&1 | tee /tmp/vnc-start.log
+          for i in $(seq 1 15); do
+            if pgrep -f "Xvnc.*:1" > /dev/null; then echo "TurboVNC up (${i}s)"; exit 0; fi
+            sleep 1
+          done
+          echo "VNC failed"; cat /tmp/vnc-start.log; exit 1
+
+      - name: Start noVNC (Web VNC)
+        run: |
+          cd ~/noVNC
+          ./utils/novnc_proxy --vnc localhost:$VNC_PORT --listen $NOVNC_PORT > /tmp/novnc.log 2>&1 &
+          for i in $(seq 1 10); do
+            if netstat -tuln | grep :$NOVNC_PORT > /dev/null; then echo "noVNC up (${i}s)"; exit 0; fi
+            sleep 1
+          done
+          echo "noVNC failed"; cat /tmp/novnc.log; exit 1
+
+      - name: Install cloudflared
+        run: |
+          wget -q -O /tmp/cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i /tmp/cloudflared.deb
+          cloudflared --version
+
+      - name: Start Cloudflare Quick Tunnel
+        id: tunnel
+        run: |
+          cloudflared tunnel --no-autoupdate --url http://localhost:$NOVNC_PORT > /tmp/tunnel.log 2>&1 &
+          TUNNEL_URL=""
+          for i in $(seq 1 30); do
+            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/tunnel.log | head -1)
+            [ -n "$TUNNEL_URL" ] && break
+            sleep 2
+          done
+          [ -z "$TUNNEL_URL" ] && { echo "no tunnel url"; cat /tmp/tunnel.log; exit 1; }
+          echo "tunnel_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
+          echo "Tunnel: $TUNNEL_URL"
+
+      - name: Display Connection Info
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "            FIREFOX ADDON VNC IS RUNNING!"
+          echo "================================================================"
+          echo ""
+          echo "One-click VNC (auto-connects, password pre-filled, local scaling):"
+          echo "${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSCODE}"
+          echo ""
+          echo "server.py mode: ${SERP_MODE}"
+          echo ""
+
+      - name: Keep Session Alive
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          set +e
+          echo "Keeping VNC session alive..."
+          while true; do
+            echo "VNC: ${{ steps.tunnel.outputs.tunnel_url }}/vnc.html?autoconnect=true&resize=scale&password=${VNC_PASSCODE}"
+            if ! pgrep -f "Xvnc.*:1" > /dev/null; then
+              echo "VNC stopped! Restarting..."
+              vncserver :1 -geometry 1920x1080 -depth 24 -rfbport $VNC_PORT; sleep 3
+            fi
+            if ! pgrep -x "cloudflared" > /dev/null; then
+              echo "Tunnel stopped! Restarting..."
+              cloudflared tunnel --no-autoupdate --url http://localhost:$NOVNC_PORT > /tmp/tunnel.log 2>&1 &
+              sleep 5
+            fi
+            if ! pgrep -f "$PORTABLE_DIR/firefox/firefox" > /dev/null; then
+              echo "Firefox closed! Relaunching..."
+              DISPLAY=:1 "$PORTABLE_DIR/firefox/firefox" --profile "$PORTABLE_DIR/profile" --no-remote &
+              sleep 3
+            fi
+            if ! pgrep -f "server.py" > /dev/null; then
+              echo "server.py stopped! Restarting..."
+              cd "$ADDON_DIR"; source .venv/bin/activate
+              nohup python3 -u server.py --mode "${SERP_MODE}" > "$LOG_FILE" 2>&1 &
+              sleep 3
+            fi
+            ln -sf "$LOG_FILE" /home/runner/Desktop/serp-logs.txt 2>/dev/null || true
+            echo "------ server.py log (last 25 lines) @ $(date -u +%H:%M:%SZ) ------"
+            tail -n 25 "$LOG_FILE" 2>/dev/null || echo "(no log yet)"
+            echo "-------------------------------------------"
+            sleep 30
+          done
+
+      - name: Upload server.py log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serp-logs
+          path: /home/runner/serp-logs.txt
+          if-no-files-found: warn
+
+      - name: Cleanup VNC
+        if: always()
+        timeout-minutes: 1
+        run: |
+          export PATH=$PATH:/opt/TurboVNC/bin
+          pkill -f "server.py" || true
+          pkill -f "firefox" || true
+          pkill -x cloudflared || true
+          vncserver -kill :1 || true
+          if [ -n "$WS_IPAUTH_ID" ]; then
+            echo "Removing webshare IP authorization id=$WS_IPAUTH_ID..."
+            curl -s -o /dev/null -w "ipauth delete status=%{http_code}\n" -X DELETE \
+              -H "Authorization: Token ${WEBSHARE_API_KEY}" \
+              "https://proxy.webshare.io/api/v2/proxy/ipauthorization/${WS_IPAUTH_ID}/" || true
+          fi
+          echo "Cleanup complete"
